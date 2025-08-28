@@ -1,0 +1,83 @@
+# Core FastAPI dependencies
+fastapi==0.100.0
+uvicorn[standard]==0.23.0
+pydantic==1.10.12
+python-multipart==0.0.6
+python-dotenv==1.0.0
+httpx==0.24.1
+
+# Database and ORM
+sqlalchemy==2.0.20
+alembic==1.11.3
+aiosqlite==0.19.0  # Fallback database for development
+
+# Production Database Drivers (Requires C++ Build Tools)
+# Install these after setting up C++ build tools:
+# asyncpg==0.28.0
+# psycopg2-binary==2.9.7
+
+# Authentication and Security
+python-jose[cryptography]==3.3.0
+argon2-cffi==23.1.0
+cryptography==41.0.3
+
+# File Handling and Image Processing
+Pillow==10.0.0  # If this fails, try: pip install --only-binary :all: Pillow==10.0.0
+
+# Geospatial Core (No C++ required)
+earthengine-api==0.1.355
+google-cloud-storage==2.10.0
+google-auth==2.22.0
+geopy==2.4.0
+geemap==0.28.0  # For Earth Engine visualization
+
+# Geospatial Advanced (Requires C++ Build Tools)
+# Install these after setting up C++ build tools:
+# geoalchemy2==0.13.0
+# shapely==2.0.1
+# geopandas==0.14.0
+# rasterio==1.3.8
+
+# Machine Learning and Data Processing
+numpy==1.24.3  # Using stable version
+pandas==2.0.3
+scikit-learn==1.3.0  # Optional: For ML features
+lightgbm==4.0.0  # Optional: For advanced ML
+shap==0.42.0  # Optional: For model explanations
+
+# Data processing and analysis
+numpy==1.24.3
+pandas==2.0.3
+
+# Testing and Quality Assurance
+pytest==7.4.0
+pytest-asyncio==0.21.0
+pytest-cov==4.1.0
+
+# Development Tools
+black==23.7.0
+isort==5.12.0
+flake8==6.1.0
+autopep8==2.0.4
+
+# Optional: Production Features
+# Caching and Background Tasks
+redis==5.0.0  # For caching
+celery[redis]==5.3.1  # For background tasks
+
+# Storage
+boto3==1.28.0  # For S3-compatible storage
+
+# Computer Vision and OCR (Requires C++ Build Tools)
+# opencv-python-headless==4.8.0.74
+# pytesseract==0.3.10
+
+# Monitoring and Observability
+sentry-sdk==1.29.2  # For error tracking
+prometheus-client==0.17.0  # For metrics
+
+# Note: To install all optional packages, remove the '#' from the lines above
+# For production deployment, consider using:
+#   pip install -r requirements.txt
+# For development with all features:
+#   pip install -r requirements.txt && pip install -r requirements.txt --no-deps
