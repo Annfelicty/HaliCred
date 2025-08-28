@@ -1,4 +1,4 @@
-# GreenScore
+# HaliCred
 
 ## Setting Up the Backend Environment
 
