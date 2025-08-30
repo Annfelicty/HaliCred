@@ -46,7 +46,7 @@ from app.jwks import router as jwks_router
 from app.config import settings
 
 # Import API modules
-from app.api import auth, evidence
+from app.api import auth, evidence, ai_engine
 
 # Setup
 app = FastAPI(
@@ -231,6 +231,7 @@ def decide_application(id: str, payload: schemas.DecisionSchema, user=Depends(ut
 # Include all routers
 app.include_router(auth.router)
 app.include_router(evidence.router)
+app.include_router(ai_engine.router)
 app.include_router(profile_router)
 app.include_router(score_router)
 app.include_router(loan_router)

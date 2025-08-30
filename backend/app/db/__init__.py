@@ -14,6 +14,9 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://user:password@localh
 engine = create_engine(DATABASE_URL, echo=True, future=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+# Create declarative base
+Base = declarative_base()
+
 def get_db():
     db = SessionLocal()
     try:

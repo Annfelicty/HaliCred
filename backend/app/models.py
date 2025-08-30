@@ -9,10 +9,17 @@ from sqlalchemy import Column, String, Integer, ForeignKey, Numeric, Enum, TIMES
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
 from sqlalchemy.orm import relationship, declarative_base
 from geoalchemy2 import Geometry
+from app.db import Base
 from uuid import uuid4
 import sqlalchemy as sa
 
-Base = declarative_base()
+# Import AI models
+from app.db.ai_models import (
+    AIEvidence, OCRResult, CVResult, EmissionResult, GreenScoreResult, 
+    CarbonCredit, SectorBaseline, ReviewCase, AIProcessingLog, UserGreenScoreHistory
+)
+
+# Base is imported from app.db
 
 class User(Base):
     __tablename__ = "users"
@@ -27,6 +34,13 @@ class User(Base):
     verifications = relationship("Verification", back_populates="user")
     scores = relationship("GreenScore", back_populates="user")
     evidence = relationship("Evidence", back_populates="user")
+    
+    # AI-related relationships
+    ai_evidence = relationship("AIEvidence", back_populates="user")
+    greenscore_results = relationship("GreenScoreResult", back_populates="user")
+    carbon_credits = relationship("CarbonCredit", back_populates="user")
+    ai_processing_logs = relationship("AIProcessingLog", back_populates="user")
+    greenscore_history = relationship("UserGreenScoreHistory", back_populates="user")
 
 
 class BusinessProfile(Base):
