@@ -4,6 +4,7 @@ import { BankApp } from './Components/BankApp';
 import { Button } from './Components/Ui/button';
 import { Badge } from './Components/Ui/badge';
 import { Leaf, Building2, Sparkles, TrendingUp, Star, Zap } from 'lucide-react';
+import { AuthProvider } from './hooks/useAuth';
 
 export default function App() {
   const [userType, setUserType] = useState<'sme' | 'bank' | null>(null);
@@ -21,11 +22,19 @@ export default function App() {
   }, []);
 
   if (userType === 'sme') {
-    return <SMEApp onBack={() => setUserType(null)} />;
+    return (
+      <AuthProvider>
+        <SMEApp onBack={() => setUserType(null)} />
+      </AuthProvider>
+    );
   }
 
   if (userType === 'bank') {
-    return <BankApp onBack={() => setUserType(null)} />;
+    return (
+      <AuthProvider>
+        <BankApp onBack={() => setUserType(null)} />
+      </AuthProvider>
+    );
   }
 
   return (

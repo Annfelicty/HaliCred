@@ -35,12 +35,14 @@ from uuid import uuid4, UUID
 
 from fastapi import FastAPI, Depends, HTTPException, APIRouter, status
 from fastapi.middleware.cors import CORSMiddleware
+import os
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from jose import jwt, JWTError
 
 from app import models, schemas, utilis
-from app.db import get_db, SessionLocal
+from app.db import get_db
+from app.auth import get_current_user
 from app.models import User, BusinessProfile
 from app.jwks import router as jwks_router
 from app.config import settings
@@ -55,12 +57,14 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Add CORS middleware
+# CORS Configuration
+origins = os.getenv("BACKEND_CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.BACKEND_CORS_ORIGINS,
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 

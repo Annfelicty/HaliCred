@@ -15,12 +15,12 @@ from pydantic import BaseModel
 
 from app.db import get_db
 from app.models import User
-from app.main import get_current_user
+from app.auth import get_current_user
 from app.ai import (
     AIOrchestrator, ConfidenceManager, SectorBaselineService, 
-    ScoreComputationService, CarbonCreditService
+    ScoreComputer, CarbonCreditAggregator
 )
-from app.ai.models import AIRequest, Evidence
+from app.ai.models import AIOrchestrationRequest, EvidenceData
 from app.services.ai_service import AIService
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,11 @@ ai_orchestrator = AIOrchestrator(gemini_api_key=os.getenv("GEMINI_API_KEY"))
 confidence_manager = ConfidenceManager()
 
 router = APIRouter(prefix="/ai", tags=["AI Engine"])
+
+# Helper function to get AI service
+def get_ai_service(db: Session = Depends(get_db)) -> AIService:
+    """Dependency to get AI service instance"""
+    return AIService(db)
 
 # Request/Response Models
 class EvidenceUploadRequest(BaseModel):
@@ -158,8 +163,8 @@ async def get_current_greenscore(
 
 # Helper function to get AI service
 def get_ai_service(db: Session = Depends(get_db)) -> AIService:
-    """Get AI service instance"""
-    return AIService(db, ai_orchestrator, confidence_manager)
+    """Dependency to get AI service instance"""
+    return AIService(db)
 
 @router.get("/greenscore/history", response_model=ScoreHistoryResponse)
 async def get_greenscore_history(
@@ -355,14 +360,14 @@ async def submit_review_decision(
 
 # Helper Functions
 
-async def process_evidence_async(ai_request: AIRequest):
+async def process_evidence_async(ai_request: AIOrchestrationRequest):
     """Background task for processing large evidence files"""
     try:
         result = await ai_orchestrator.process_request(ai_request)
         # In a real system, store result in database and notify user
-        logger.info(f"Async processing completed for request {ai_request.request_id}")
+        logger.info(f"Async processing completed for evidence {ai_request.evidence.evidence_id}")
     except Exception as e:
-        logger.error(f"Async processing failed for request {ai_request.request_id}: {str(e)}")
+        logger.error(f"Async processing failed for evidence {ai_request.evidence.evidence_id}: {str(e)}")
 
 async def get_user_history(user_id: str, db: Session) -> Dict[str, Any]:
     """Get user history for confidence assessment"""

@@ -3,7 +3,7 @@ Sector Baseline Service
 Provides sector-specific baseline statistics for relative scoring
 """
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Optional, List
 from datetime import datetime
 import json
 

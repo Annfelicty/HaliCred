@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 import json
 
-from .models import AIResult, GreenScoreResult, CarbonCredit
+from .models import AIOrchestrationResult, GreenScoreResult, CarbonCredit
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ class ConfidenceManager:
 
     async def evaluate_confidence(
         self,
-        ai_result: AIResult,
+        ai_result: AIOrchestrationResult,
         user_history: Dict[str, Any] = None,
         sector_context: Dict[str, Any] = None
     ) -> Dict[str, Any]:
@@ -111,7 +111,7 @@ class ConfidenceManager:
 
     async def _calculate_component_confidences(
         self,
-        ai_result: AIResult,
+        ai_result: AIOrchestrationResult,
         user_history: Optional[Dict[str, Any]],
         sector_context: Optional[Dict[str, Any]]
     ) -> Dict[str, float]:
@@ -138,7 +138,7 @@ class ConfidenceManager:
         
         return components
 
-    def _assess_data_quality(self, ai_result: AIResult) -> float:
+    def _assess_data_quality(self, ai_result: AIOrchestrationResult) -> float:
         """Assess quality of input data and processing results"""
         quality_score = 0.5  # Base score
         
@@ -217,7 +217,7 @@ class ConfidenceManager:
 
     def _assess_sector_consistency(
         self, 
-        ai_result: AIResult, 
+        ai_result: AIOrchestrationResult, 
         sector_context: Dict[str, Any]
     ) -> float:
         """Assess consistency with sector norms"""
@@ -255,7 +255,7 @@ class ConfidenceManager:
 
     async def _assess_fraud_risk(
         self, 
-        ai_result: AIResult, 
+        ai_result: AIOrchestrationResult, 
         user_history: Dict[str, Any]
     ) -> float:
         """Assess fraud risk (0 = no risk, 1 = high risk)"""
@@ -295,7 +295,7 @@ class ConfidenceManager:
     def _determine_review_requirements(
         self, 
         confidence: float, 
-        ai_result: AIResult, 
+        ai_result: AIOrchestrationResult, 
         components: Dict[str, float]
     ) -> Dict[str, Any]:
         """Determine if human review is required and why"""
@@ -359,7 +359,7 @@ class ConfidenceManager:
 
     async def create_review_case(
         self,
-        ai_result: AIResult,
+        ai_result: AIOrchestrationResult,
         confidence_assessment: Dict[str, Any],
         reviewer_notes: str = ""
     ) -> Dict[str, Any]:
@@ -390,6 +390,42 @@ class ConfidenceManager:
         except Exception as e:
             logger.error(f"Error creating review case: {str(e)}")
             return {"error": str(e)}
+
+    def evaluate_result(self, result: AIOrchestrationResult) -> Dict[str, Any]:
+        """Evaluate AI result and determine if human review is needed"""
+        try:
+            confidence_score = result.confidence
+            review_reasons = []
+            
+            # Check confidence threshold
+            if confidence_score < self.confidence_threshold:
+                review_reasons.append(ReviewReason.LOW_CONFIDENCE)
+            
+            # Check for high-value claims
+            if result.co2_saved_tonnes > 10.0:  # High impact claim
+                review_reasons.append(ReviewReason.HIGH_VALUE_CLAIM)
+            
+            # Check for outliers
+            if result.greenscore > 900:  # Very high score
+                review_reasons.append(ReviewReason.SECTOR_OUTLIER)
+            
+            needs_review = len(review_reasons) > 0
+            
+            return {
+                "needs_review": needs_review,
+                "confidence_score": confidence_score,
+                "review_reasons": [r.value for r in review_reasons],
+                "priority": "high" if confidence_score < 0.5 else "medium" if confidence_score < 0.7 else "low"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error evaluating result: {str(e)}")
+            return {
+                "needs_review": True,
+                "confidence_score": 0.0,
+                "review_reasons": ["evaluation_error"],
+                "priority": "high"
+            }
 
     def get_review_queue_summary(self) -> Dict[str, Any]:
         """Get summary of pending reviews (mock implementation)"""

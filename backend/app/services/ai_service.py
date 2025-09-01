@@ -1,155 +1,130 @@
 """
-AI Service module for HaliScore.
-
-This module provides AI-powered scoring and analysis for sustainable practices.
-It includes OCR processing, climate-smart practice detection, and Green Score calculation.
+AI Service - Database integration layer for AI engine
+Handles storing and retrieving AI processing results
 """
-
-import os
-import json
 import logging
-from typing import Dict, List, Optional, Tuple
-import numpy as np
-from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
+from datetime import datetime
+from sqlalchemy.orm import Session
+from sqlalchemy import desc
 
-# Import ML libraries
-try:
-    import cv2
-    import pytesseract
-    from PIL import Image
-    import requests
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.feature_extraction.text import TfidfVectorizer
-except ImportError:
-    logging.warning("Some ML libraries not available. Install with: pip install opencv-python pytesseract pillow scikit-learn")
+from app.db.ai_models import (
+    AIEvidence, OCRResult, CVResult, EmissionResult,
+    GreenScoreResult, CarbonCredit, SectorBaseline,
+    ReviewCase, AIProcessingLog, UserGreenScoreHistory
+)
 
 logger = logging.getLogger(__name__)
 
-class GreenScoreAI:
-    """AI service for calculating Green Scores based on sustainable practices."""
+class AIService:
+    """Database service layer for AI engine operations"""
     
-    def __init__(self):
-        self.sustainable_keywords = {
-            'solar': ['solar', 'photovoltaic', 'renewable energy', 'clean energy'],
-            'organic': ['organic', 'natural', 'pesticide-free', 'chemical-free'],
-            'recycling': ['recycled', 'recycling', 'reuse', 'upcycle'],
-            'water_conservation': ['water saving', 'drip irrigation', 'rainwater harvesting'],
-            'energy_efficient': ['led', 'energy efficient', 'low power', 'eco-friendly'],
-            'sustainable_farming': ['crop rotation', 'cover crops', 'no-till', 'permaculture']
-        }
-        
-        self.practice_scores = {
-            'solar': 25,
-            'organic': 20,
-            'recycling': 15,
-            'water_conservation': 15,
-            'energy_efficient': 10,
-            'sustainable_farming': 20
-        }
-        
-    def analyze_receipt_ocr(self, image_path: str) -> Dict:
-        """Analyze receipt using OCR to detect sustainable purchases."""
+    def __init__(self, db: Session):
+        self.db = db
+    
+    async def store_evidence(self, evidence_data: Dict[str, Any]) -> AIEvidence:
+        """Store evidence in database"""
         try:
-            # Read image
-            image = cv2.imread(image_path)
-            if image is None:
-                return {"error": "Could not read image"}
-            
-            # Preprocess image
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-            
-            # Extract text
-            text = pytesseract.image_to_string(thresh)
-            
-            # Analyze for sustainable practices
-            analysis = self._analyze_text_for_sustainability(text)
-            
-            return {
-                "text": text,
-                "sustainable_practices": analysis,
-                "confidence": 0.85
-            }
-            
+            evidence = AIEvidence(
+                user_id=evidence_data["user_id"],
+                evidence_type=evidence_data["type"],
+                file_path=evidence_data.get("file_path"),
+                file_url=evidence_data.get("file_url"),
+                metadata=evidence_data.get("metadata", {}),
+                geolocation=evidence_data.get("geolocation"),
+                processing_status="pending"
+            )
+            self.db.add(evidence)
+            self.db.commit()
+            self.db.refresh(evidence)
+            return evidence
         except Exception as e:
-            logger.error(f"OCR analysis failed: {e}")
-            return {"error": str(e)}
+            logger.error(f"Error storing evidence: {str(e)}")
+            self.db.rollback()
+            raise
     
-    def _analyze_text_for_sustainability(self, text: str) -> Dict:
-        """Analyze text for sustainable practices."""
-        text_lower = text.lower()
-        detected_practices = {}
-        
-        for practice, keywords in self.sustainable_keywords.items():
-            for keyword in keywords:
-                if keyword in text_lower:
-                    detected_practices[practice] = {
-                        "detected": True,
-                        "keyword": keyword,
-                        "score": self.practice_scores[practice]
-                    }
-                    break
-        
-        return detected_practices
-    
-    def calculate_green_score(self, user_data: Dict) -> Dict:
-        """Calculate comprehensive Green Score based on user data."""
-        base_score = 50
-        subscores = {}
-        explanations = []
-        
-        # Analyze evidence
-        if 'evidence' in user_data:
-            for evidence in user_data['evidence']:
-                if evidence.get('type') == 'receipt':
-                    analysis = self.analyze_receipt_ocr(evidence.get('path', ''))
-                    if 'sustainable_practices' in analysis:
-                        for practice, details in analysis['sustainable_practices'].items():
-                            if details['detected']:
-                                subscores[practice] = details['score']
-                                explanations.append(f"+{details['score']} {practice} practice detected")
-        
-        # Analyze business type
-        business_type = user_data.get('business_type', '')
-        if business_type == 'agriculture':
-            base_score += 10
-            explanations.append("+10 agriculture business (sustainable potential)")
-        
-        # Analyze location (if available)
-        if 'location' in user_data:
-            # Could integrate with climate data APIs here
-            base_score += 5
-            explanations.append("+5 location data available")
-        
-        # Calculate final score
-        total_score = base_score + sum(subscores.values())
-        final_score = min(100, max(0, total_score))
-        
-        return {
-            "score_raw": final_score,
-            "score_0_100": final_score,
-            "subscores": subscores,
-            "explanations": explanations,
-            "computed_at": datetime.now().isoformat(),
-            "confidence": 0.9
-        }
-    
-    def detect_climate_smart_practices(self, image_path: str) -> Dict:
-        """Detect climate-smart practices from images."""
+    async def get_user_greenscore_current(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get current GreenScore for user"""
         try:
-            # This would integrate with computer vision models
-            # For now, return a placeholder
+            latest_score = (
+                self.db.query(GreenScoreResult)
+                .filter(GreenScoreResult.user_id == user_id)
+                .order_by(desc(GreenScoreResult.created_at))
+                .first()
+            )
+            
+            if not latest_score:
+                return None
+                
             return {
-                "practices_detected": ["solar_panels", "organic_farming"],
-                "confidence": 0.75,
-                "metadata": {
-                    "image_quality": "good",
-                    "processing_time": 2.3
+                "user_id": latest_score.user_id,
+                "greenscore": latest_score.greenscore,
+                "subscores": latest_score.subscores,
+                "co2_saved_tonnes": latest_score.co2_saved_tonnes,
+                "confidence": latest_score.confidence,
+                "last_updated": latest_score.created_at,
+                "explainers": latest_score.explainers,
+                "actions": latest_score.actions
+            }
+        except Exception as e:
+            logger.error(f"Error getting current GreenScore: {str(e)}")
+            return None
+    
+    async def get_user_greenscore_history(self, user_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get GreenScore history for user"""
+        try:
+            history = (
+                self.db.query(UserGreenScoreHistory)
+                .filter(UserGreenScoreHistory.user_id == user_id)
+                .order_by(desc(UserGreenScoreHistory.created_at))
+                .limit(limit)
+                .all()
+            )
+            
+            return [
+                {
+                    "date": record.created_at,
+                    "greenscore": record.greenscore,
+                    "change": record.score_change,
+                    "evidence_count": record.evidence_count,
+                    "co2_saved_tonnes": record.co2_saved_tonnes
                 }
+                for record in history
+            ]
+        except Exception as e:
+            logger.error(f"Error getting GreenScore history: {str(e)}")
+            return []
+    
+    async def get_carbon_credits_portfolio(self, user_id: str) -> Dict[str, Any]:
+        """Get carbon credits portfolio for user"""
+        try:
+            credits = (
+                self.db.query(CarbonCredit)
+                .filter(CarbonCredit.user_id == user_id)
+                .all()
+            )
+            
+            total_credits = sum(credit.credits_eligible for credit in credits)
+            verified_credits = sum(
+                credit.credits_eligible for credit in credits 
+                if credit.status == "verified"
+            )
+            
+            return {
+                "total_credits": total_credits,
+                "verified_credits": verified_credits,
+                "pending_credits": total_credits - verified_credits,
+                "credits_breakdown": [
+                    {
+                        "evidence_ids": credit.evidence_ids,
+                        "credits": credit.credits_eligible,
+                        "co2_tonnes": credit.verified_co2_tonnes,
+                        "status": credit.status,
+                        "created_at": credit.created_at
+                    }
+                    for credit in credits
+                ]
             }
         except Exception as e:
-            logger.error(f"Climate practice detection failed: {e}")
-            return {"error": str(e)}
-
-# Global instance
-ai_service = GreenScoreAI()
+            logger.error(f"Error getting carbon credits portfolio: {str(e)}")
+            return {"total_credits": 0, "verified_credits": 0, "pending_credits": 0, "credits_breakdown": []}

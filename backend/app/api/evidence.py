@@ -14,7 +14,7 @@ from app.db import get_db
 from app.models import User, Evidence
 from app.utilis import create_presigned_put, process_ocr, process_climate_practices
 from app.config import settings
-from app.main import get_current_user
+from app.auth import get_current_user
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
 

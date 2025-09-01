@@ -17,8 +17,8 @@ from .confidence_manager import ConfidenceManager
 
 # Import data models
 from .models import (
-    Evidence, OCRResult, CVResult, EmissionResult, 
-    GreenScoreResult, CarbonCredit, AIRequest, AIResult
+    EvidenceData, OCRResult, CVResult, EmissionResult, 
+    GreenScoreResult, CarbonCredit, AIOrchestrationRequest, AIOrchestrationResult
 )
 
 __all__ = [
@@ -29,6 +29,6 @@ __all__ = [
     "SectorBaselineService",
     "CarbonCreditAggregator",
     "ConfidenceManager",
-    "Evidence", "OCRResult", "CVResult", "EmissionResult", 
-    "GreenScoreResult", "CarbonCredit", "AIRequest", "AIResult"
+    "EvidenceData", "OCRResult", "CVResult", "EmissionResult", 
+    "GreenScoreResult", "CarbonCredit", "AIOrchestrationRequest", "AIOrchestrationResult"
 ]

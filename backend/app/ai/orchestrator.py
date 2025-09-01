@@ -8,11 +8,10 @@ import asyncio
 from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 from .models import (
-    AIRequest, AIResult, Evidence, OCRResult, CVResult, 
-    EmissionResult, GreenScoreResult, CarbonCredit
+    EvidenceData, OCRResult, CVResult, EmissionResult, 
+    GreenScoreResult, CarbonCredit, AIOrchestrationRequest, AIOrchestrationResult
 )
 from .evidence_processor import EvidenceProcessor
 from .emission_calculator import EmissionCalculator
@@ -50,91 +49,14 @@ class AIOrchestrator:
             "validate_evidence_quality": self._validate_evidence_quality
         }
         
-        # Gemini function declarations
-        self.function_declarations = [
-            genai.protos.FunctionDeclaration(
-                name="process_evidence",
-                description="Process uploaded evidence using OCR and computer vision",
-                parameters=genai.protos.Schema(
-                    type=genai.protos.Type.OBJECT,
-                    properties={
-                        "evidence": genai.protos.Schema(
-                            type=genai.protos.Type.OBJECT,
-                            description="Evidence object with file path and metadata"
-                        )
-                    },
-                    required=["evidence"]
-                )
-            ),
-            genai.protos.FunctionDeclaration(
-                name="calculate_emissions",
-                description="Calculate CO2 emissions from evidence data",
-                parameters=genai.protos.Schema(
-                    type=genai.protos.Type.OBJECT,
-                    properties={
-                        "ocr_result": genai.protos.Schema(type=genai.protos.Type.OBJECT, description="OCR processing results"),
-                        "cv_result": genai.protos.Schema(type=genai.protos.Type.OBJECT, description="Computer vision results"),
-                        "sector": genai.protos.Schema(type=genai.protos.Type.STRING, description="Business sector"),
-                        "region": genai.protos.Schema(type=genai.protos.Type.STRING, description="Geographic region")
-                    },
-                    required=["ocr_result", "cv_result", "sector"]
-                )
-            ),
-            genai.protos.FunctionDeclaration(
-                name="compute_greenscore",
-                description="Compute GreenScore from emission results and user metrics",
-                parameters=genai.protos.Schema(
-                    type=genai.protos.Type.OBJECT,
-                    properties={
-                        "user_id": genai.protos.Schema(type=genai.protos.Type.STRING),
-                        "evidence_id": genai.protos.Schema(type=genai.protos.Type.STRING),
-                        "sector": genai.protos.Schema(type=genai.protos.Type.STRING),
-                        "emission_result": genai.protos.Schema(type=genai.protos.Type.OBJECT),
-                        "user_metrics": genai.protos.Schema(type=genai.protos.Type.OBJECT, description="User sustainability metrics")
-                    },
-                    required=["user_id", "evidence_id", "sector", "emission_result", "user_metrics"]
-                )
-            ),
-            genai.protos.FunctionDeclaration(
-                name="calculate_carbon_credits",
-                description="Calculate eligible carbon credits from emissions and score",
-                parameters=genai.protos.Schema(
-                    type=genai.protos.Type.OBJECT,
-                    properties={
-                        "user_id": genai.protos.Schema(type=genai.protos.Type.STRING),
-                        "evidence_id": genai.protos.Schema(type=genai.protos.Type.STRING),
-                        "emission_result": genai.protos.Schema(type=genai.protos.Type.OBJECT),
-                        "greenscore_result": genai.protos.Schema(type=genai.protos.Type.OBJECT),
-                        "sector": genai.protos.Schema(type=genai.protos.Type.STRING)
-                    },
-                    required=["user_id", "evidence_id", "emission_result", "greenscore_result", "sector"]
-                )
-            ),
-            genai.protos.FunctionDeclaration(
-                name="estimate_user_metrics",
-                description="Estimate user sustainability metrics from evidence",
-                parameters=genai.protos.Schema(
-                    type=genai.protos.Type.OBJECT,
-                    properties={
-                        "emission_result": genai.protos.Schema(type=genai.protos.Type.OBJECT),
-                        "sector": genai.protos.Schema(type=genai.protos.Type.STRING),
-                        "ocr_data": genai.protos.Schema(type=genai.protos.Type.OBJECT),
-                        "cv_data": genai.protos.Schema(type=genai.protos.Type.OBJECT)
-                    },
-                    required=["emission_result", "sector", "ocr_data", "cv_data"]
-                )
-            )
-        ]
-        
-        # Configure function calling tool
-        self.function_tool = genai.protos.Tool(
-            function_declarations=self.function_declarations
-        )
+        # Simplified function declarations for compatibility
+        self.function_declarations = None
+        self.function_tool = None
 
-    async def process_request(self, request: AIRequest) -> AIResult:
+    async def process_request(self, request: AIOrchestrationRequest) -> AIOrchestrationResult:
         """Main orchestration method - processes AI request end-to-end"""
         try:
-            logger.info(f"Processing AI request for user {request.user_id}, evidence {request.evidence.id}")
+            logger.info(f"Processing AI request for user {request.evidence.user_id}, evidence {request.evidence.evidence_id}")
             
             # If Gemini is available, use LLM orchestration
             if self.model:
@@ -145,16 +67,18 @@ class AIOrchestrator:
                 
         except Exception as e:
             logger.error(f"Error in AI orchestration: {str(e)}")
-            return AIResult(
-                request_id=request.request_id,
-                user_id=request.user_id,
-                evidence_id=request.evidence.id,
-                success=False,
-                error=str(e),
-                processing_time_ms=0
+            return AIOrchestrationResult(
+                evidence_id=request.evidence.evidence_id,
+                user_id=request.evidence.user_id,
+                greenscore=0,
+                subscores={},
+                co2_saved_tonnes=0.0,
+                confidence=0.0,
+                explainers=[f"Error: {str(e)}"],
+                actions=[]
             )
 
-    async def _llm_orchestrated_processing(self, request: AIRequest) -> AIResult:
+    async def _llm_orchestrated_processing(self, request: AIOrchestrationRequest) -> AIOrchestrationResult:
         """LLM-guided processing with function calling"""
         start_time = datetime.now()
         
@@ -188,16 +112,17 @@ class AIOrchestrator:
             
             processing_time = (datetime.now() - start_time).total_seconds() * 1000
             
-            return AIResult(
-                request_id=request.request_id,
-                user_id=request.user_id,
-                evidence_id=request.evidence.id,
-                success=True,
-                greenscore_result=result_data.get("greenscore_result"),
-                carbon_credits=result_data.get("carbon_credits", []),
-                processing_time_ms=int(processing_time),
-                ai_explanation=result_data.get("explanation", "AI processing completed"),
-                confidence=result_data.get("confidence", 0.8)
+            greenscore_result = result_data.get("greenscore_result", {})
+            return AIOrchestrationResult(
+                evidence_id=request.evidence.evidence_id,
+                user_id=request.evidence.user_id,
+                greenscore=greenscore_result.get("greenscore", 0),
+                subscores=greenscore_result.get("subscores", {}),
+                co2_saved_tonnes=greenscore_result.get("co2_saved_tonnes", 0.0),
+                confidence=result_data.get("confidence", 0.8),
+                explainers=greenscore_result.get("explainers", []),
+                actions=greenscore_result.get("actions", []),
+                carbon_credits=result_data.get("carbon_credits")
             )
             
         except Exception as e:
@@ -205,7 +130,7 @@ class AIOrchestrator:
             # Fallback to deterministic processing
             return await self._deterministic_processing(request)
 
-    async def _execute_llm_workflow(self, prompt: str, request: AIRequest) -> Dict[str, Any]:
+    async def _execute_llm_workflow(self, prompt: str, request: AIOrchestrationRequest) -> Dict[str, Any]:
         """Execute the Gemini workflow with function calling"""
         max_iterations = 10
         iteration = 0
@@ -292,15 +217,14 @@ class AIOrchestrator:
             "confidence": greenscore_result.confidence if greenscore_result else 0.5
         }
 
-    async def _deterministic_processing(self, request: AIRequest) -> AIResult:
+    async def _deterministic_processing(self, request: AIOrchestrationRequest) -> AIOrchestrationResult:
         """Fallback deterministic processing without LLM"""
         start_time = datetime.now()
         
         try:
-            # Step 1: Process evidence
-            evidence_result = await self.evidence_processor.process_evidence(request.evidence)
-            ocr_result = evidence_result["ocr_result"]
-            cv_result = evidence_result["cv_result"]
+            # Step 1: Process evidence (already processed)
+            ocr_result = request.evidence.ocr
+            cv_result = request.evidence.cv
             
             # Step 2: Calculate emissions
             emission_result = await self.emission_calculator.calculate_emissions(
@@ -320,8 +244,8 @@ class AIOrchestrator:
             
             # Step 4: Compute GreenScore
             greenscore_result = await self.score_computer.compute_score(
-                user_id=request.user_id,
-                evidence_id=request.evidence.id,
+                user_id=request.evidence.user_id,
+                evidence_id=request.evidence.evidence_id,
                 sector=request.sector,
                 emission_result=emission_result,
                 user_metrics=user_metrics,
@@ -330,8 +254,8 @@ class AIOrchestrator:
             
             # Step 5: Calculate carbon credits
             carbon_credits = await self.carbon_credit_aggregator.calculate_carbon_credits(
-                user_id=request.user_id,
-                evidence_id=request.evidence.id,
+                user_id=request.evidence.user_id,
+                evidence_id=request.evidence.evidence_id,
                 emission_result=emission_result,
                 greenscore_result=greenscore_result,
                 sector=request.sector
@@ -339,42 +263,43 @@ class AIOrchestrator:
             
             processing_time = (datetime.now() - start_time).total_seconds() * 1000
             
-            return AIResult(
-                request_id=request.request_id,
-                user_id=request.user_id,
-                evidence_id=request.evidence.id,
-                success=True,
-                greenscore_result=greenscore_result,
-                carbon_credits=carbon_credits,
-                processing_time_ms=int(processing_time),
-                ai_explanation="Deterministic processing completed successfully",
-                confidence=greenscore_result.confidence
+            return AIOrchestrationResult(
+                evidence_id=request.evidence.evidence_id,
+                user_id=request.evidence.user_id,
+                greenscore=greenscore_result.greenscore,
+                subscores=greenscore_result.subscores,
+                co2_saved_tonnes=greenscore_result.co2_saved_tonnes,
+                confidence=greenscore_result.confidence,
+                explainers=greenscore_result.explainers,
+                actions=greenscore_result.actions,
+                carbon_credits=carbon_credits[0] if carbon_credits else None
             )
             
         except Exception as e:
             logger.error(f"Error in deterministic processing: {str(e)}")
             processing_time = (datetime.now() - start_time).total_seconds() * 1000
             
-            return AIResult(
-                request_id=request.request_id,
-                user_id=request.user_id,
-                evidence_id=request.evidence.id,
-                success=False,
-                error=str(e),
-                processing_time_ms=int(processing_time)
+            return AIOrchestrationResult(
+                evidence_id=request.evidence.evidence_id,
+                user_id=request.evidence.user_id,
+                greenscore=0,
+                subscores={},
+                co2_saved_tonnes=0.0,
+                confidence=0.0,
+                explainers=[f"Error: {str(e)}"],
+                actions=[]
             )
 
-    def _build_context(self, request: AIRequest) -> str:
+    def _build_context(self, request: AIOrchestrationRequest) -> str:
         """Build context string for LLM"""
         context = f"""
         Evidence Processing Request:
-        - User ID: {request.user_id}
-        - Evidence ID: {request.evidence.id}
+        - User ID: {request.evidence.user_id}
+        - Evidence ID: {request.evidence.evidence_id}
         - Evidence Type: {request.evidence.type}
         - Sector: {request.sector}
         - Region: {request.region}
-        - File Path: {request.evidence.file_path}
-        - Upload Time: {request.evidence.uploaded_at}
+        - Timestamp: {request.evidence.timestamp}
         
         Please process this evidence to calculate GreenScore and carbon credits.
         """
@@ -383,7 +308,7 @@ class AIOrchestrator:
     # Function implementations for LLM calls
     async def _process_evidence(self, evidence: Dict[str, Any]) -> Dict[str, Any]:
         """Process evidence wrapper for LLM"""
-        evidence_obj = Evidence(**evidence)
+        evidence_obj = EvidenceData(**evidence)
         result = await self.evidence_processor.process_evidence(evidence_obj)
         return {
             "ocr_result": result["ocr_result"].dict() if result["ocr_result"] else None,
