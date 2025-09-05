@@ -13,11 +13,7 @@ from pathlib import Path
 from celery import Celery
 from typing import Dict, Any
 
-# Import AI service
-try:
-    from app.ai_service import ai_service
-except ImportError:
-    ai_service = None
+ai_service = None
 
 OTP_STORE = {}
 USERS = {}

@@ -5,19 +5,15 @@ This module defines the SQLAlchemy ORM models for the application.
 It includes models for User, BusinessProfile, LoanApplication, Verification, GreenScore, and AuditLog.
 """
 
-from sqlalchemy import Column, String, Integer, ForeignKey, Numeric, Enum, TIMESTAMP, text
+from sqlalchemy import Column, String, Integer, ForeignKey, Numeric, Enum, TIMESTAMP, text, JSON
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
 from sqlalchemy.orm import relationship, declarative_base
-from geoalchemy2 import Geometry
+# from geoalchemy2 import Geometry  # Commented out - requires PostGIS
 from app.db import Base
 from uuid import uuid4
 import sqlalchemy as sa
 
-# Import AI models
-from app.db.ai_models import (
-    AIEvidence, OCRResult, CVResult, EmissionResult, GreenScoreResult, 
-    CarbonCredit, SectorBaseline, ReviewCase, AIProcessingLog, UserGreenScoreHistory
-)
+# AI models are defined in separate file to avoid circular imports
 
 # Base is imported from app.db
 
@@ -26,21 +22,15 @@ class User(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     phone = Column(String(32), unique=True, index=True, nullable=False)
     full_name = Column(String(120), nullable=False)
-    roles = Column(ARRAY(String), server_default=text("ARRAY['borrower']::varchar[]"))
+    roles = Column(JSON, server_default=text("'[\"borrower\"]'"))
     created_at = Column(TIMESTAMP(timezone=True), server_default=sa.func.now())
 
     profile = relationship("BusinessProfile", back_populates="user", uselist=False)
-    loans = relationship("LoanApplication", back_populates="user")
+    applications = relationship("LoanApplication", back_populates="user")
     verifications = relationship("Verification", back_populates="user")
-    scores = relationship("GreenScore", back_populates="user")
+    green_scores = relationship("GreenScore", back_populates="user")
+    audit_logs = relationship("AuditLog", back_populates="user")
     evidence = relationship("Evidence", back_populates="user")
-    
-    # AI-related relationships
-    ai_evidence = relationship("AIEvidence", back_populates="user")
-    greenscore_results = relationship("GreenScoreResult", back_populates="user")
-    carbon_credits = relationship("CarbonCredit", back_populates="user")
-    ai_processing_logs = relationship("AIProcessingLog", back_populates="user")
-    greenscore_history = relationship("UserGreenScoreHistory", back_populates="user")
 
 
 class BusinessProfile(Base):
@@ -48,7 +38,7 @@ class BusinessProfile(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), primary_key=True)
     business_type = Column(Enum("agriculture","beauty","welding","other", name="business_type_enum"))
     business_name = Column(String(160))
-    location = Column(Geometry(geometry_type="POINT", srid=4326))
+    location = Column(String(200))  # Store as lat,lon string for now
     user = relationship("User", back_populates="profile")
 
 
@@ -59,10 +49,10 @@ class LoanApplication(Base):
     amount = Column(Numeric(14,2))
     tenor_months = Column(Integer)
     quoted_rate = Column(Numeric(6,4))
-    greenscore_snapshot = Column(JSONB)
+    greenscore_snapshot = Column(JSON)
     status = Column(Enum("draft","submitted","approved","declined","disbursed", name="loan_status"))
     created_at = Column(TIMESTAMP(timezone=True), server_default=sa.func.now())
-    user = relationship("User", back_populates="loans")
+    user = relationship("User", back_populates="applications")
 
 
 class Verification(Base):
@@ -73,8 +63,8 @@ class Verification(Base):
     status = Column(Enum("pending","processing","verified","rejected", name="verification_status"), index=True)
     s3_key = Column(String, nullable=False)
     receipt_hash = Column(String(64))
-    parsed = Column(JSONB)
-    result = Column(JSONB)
+    parsed = Column(JSON)
+    result = Column(JSON)
     created_at = Column(TIMESTAMP(timezone=True), server_default=sa.func.now())
     user = relationship("User", back_populates="verifications")
 
@@ -84,10 +74,10 @@ class GreenScore(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), index=True)
     score = Column(Integer, nullable=False)
-    subscores = Column(JSONB)
-    explanation_json = Column(JSONB)
+    subscores = Column(JSON)
+    explanation_json = Column(JSON)
     computed_at = Column(TIMESTAMP(timezone=True), server_default=sa.func.now())
-    user = relationship("User", back_populates="scores")
+    user = relationship("User", back_populates="green_scores")
 
 
 class Evidence(Base):
@@ -103,10 +93,11 @@ class Evidence(Base):
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    actor_user_id = Column(UUID(as_uuid=True), nullable=True)
+    actor_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     action = Column(String(80))
     entity = Column(String(80))
     entity_id = Column(UUID(as_uuid=True))
-    payload = Column(JSONB)
+    payload = Column(JSON)
     audit_hmac = Column(String(64))
     created_at = Column(TIMESTAMP(timezone=True), server_default=sa.func.now())
+    user = relationship("User", back_populates="audit_logs")

@@ -11,7 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.main import app
-from app.db.models import Base
+from app.db import Base, get_db
 from app.config import settings
 
 # Create in-memory database for testing
@@ -258,5 +258,3 @@ class TestHealthCheck:
         assert data["status"] == "healthy"
         assert data["service"] == "haliscore-backend"
 
-# Import get_db for dependency override
-from app.db import get_db

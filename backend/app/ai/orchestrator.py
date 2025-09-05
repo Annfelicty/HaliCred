@@ -7,7 +7,10 @@ import json
 import asyncio
 from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime
-import google.generativeai as genai
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
 
 from .models import (
     EvidenceData, OCRResult, CVResult, EmissionResult, 
@@ -24,9 +27,14 @@ logger = logging.getLogger(__name__)
 class AIOrchestrator:
     """LLM-powered orchestrator that coordinates AI microservices"""
     
-    def __init__(self, gemini_api_key: Optional[str] = None):
-        if gemini_api_key:
-            genai.configure(api_key=gemini_api_key)
+    def __init__(self, config: Dict[str, Any]):
+        """Initialize AI Orchestrator with configuration"""
+        self.config = config
+        self.logger = logging.getLogger(__name__)
+        
+        # Initialize Gemini AI if available
+        if genai:
+            genai.configure(api_key=config.get('gemini_api_key', ''))
             self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
         else:
             self.model = None

@@ -40,8 +40,8 @@ class AIEvidence(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # Relationships
-    user = relationship("User", back_populates="ai_evidence")
+    # Relationships  
+    # user = relationship("User")  # Remove back_populates to avoid circular dependency
     ocr_results = relationship("OCRResult", back_populates="ai_evidence", cascade="all, delete-orphan")
     cv_results = relationship("CVResult", back_populates="ai_evidence", cascade="all, delete-orphan")
     emission_results = relationship("EmissionResult", back_populates="ai_evidence", cascade="all, delete-orphan")
@@ -69,7 +69,7 @@ class OCRResult(Base):
     amount = Column(Float)
     currency = Column(String(10), default="KES")
     date = Column(DateTime)
-    items = Column(ARRAY(String))
+    items = Column(JSON)
     
     # OCR quality metrics
     confidence = Column(Float)
@@ -90,8 +90,8 @@ class CVResult(Base):
     evidence_id = Column(UUID(as_uuid=True), ForeignKey("ai_evidence.id"), nullable=False)
     
     # CV detected objects/labels
-    labels = Column(ARRAY(String))
-    confidence_scores = Column(ARRAY(Float))
+    labels = Column(JSON)
+    confidence_scores = Column(JSON)
     bounding_boxes = Column(JSON)  # Array of bounding box coordinates
     
     # Equipment detection
@@ -151,8 +151,8 @@ class GreenScoreResult(Base):
     
     # Confidence and quality
     confidence = Column(Float, nullable=False)
-    explainers = Column(ARRAY(String))
-    actions = Column(ARRAY(String))
+    explainers = Column(JSON)
+    actions = Column(JSON)
     
     # Calculation metadata
     sector = Column(String(50), nullable=False)
@@ -273,7 +273,7 @@ class ReviewCase(Base):
     # Review metadata
     status = Column(String(20), default="pending")  # pending, in_review, approved, rejected, needs_more_info
     priority = Column(String(10), default="medium")  # low, medium, high
-    reasons = Column(ARRAY(String))  # Reasons for review
+    reasons = Column(JSON)  # Reasons for review
     confidence_score = Column(Float)
     
     # Review process
@@ -323,7 +323,7 @@ class AIProcessingLog(Base):
     
     # AI model details
     ai_model_used = Column(String(50))  # gemini-2.0-flash-exp, deterministic
-    function_calls_made = Column(ARRAY(String))
+    function_calls_made = Column(JSON)
     confidence_final = Column(Float)
     
     # Results summary

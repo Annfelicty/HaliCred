@@ -26,7 +26,12 @@ from app.services.ai_service import AIService
 logger = logging.getLogger(__name__)
 
 # Initialize AI services
-ai_orchestrator = AIOrchestrator(gemini_api_key=os.getenv("GEMINI_API_KEY"))
+ai_config = {
+    'gemini_api_key': os.getenv("GEMINI_API_KEY", ""),
+    'google_vision_api_key': os.getenv("GOOGLE_VISION_API_KEY", ""),
+    'climatiq_api_key': os.getenv("CLIMATIQ_API_KEY", "")
+}
+ai_orchestrator = AIOrchestrator(ai_config)
 confidence_manager = ConfidenceManager()
 
 router = APIRouter(prefix="/ai", tags=["AI Engine"])
