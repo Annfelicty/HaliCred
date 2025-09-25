@@ -20,11 +20,14 @@ import sqlalchemy as sa
 class User(Base):
     __tablename__ = "users"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    phone = Column(String(32), unique=True, index=True, nullable=False)
+    phone = Column(String(32), unique=True, index=True, nullable=True)
     full_name = Column(String(120), nullable=False)
+    email = Column(String(255), unique=True, index=True)
+    password_hash = Column(String(256))
+    last_login_at = Column(TIMESTAMP(timezone=True))
+    last_otp_verified_at = Column(TIMESTAMP(timezone=True))
     roles = Column(JSON, server_default=text("'[\"borrower\"]'"))
     created_at = Column(TIMESTAMP(timezone=True), server_default=sa.func.now())
-
     profile = relationship("BusinessProfile", back_populates="user", uselist=False)
     applications = relationship("LoanApplication", back_populates="user")
     verifications = relationship("Verification", back_populates="user")

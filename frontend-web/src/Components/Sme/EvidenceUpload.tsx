@@ -6,6 +6,7 @@ import { Input } from '../Ui/input';
 import { Label } from '../Ui/label';
 import { Textarea } from '../Ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../Ui/select';
+import type { LucideIcon } from 'lucide-react';
 import { ArrowLeft, Camera, Upload, Leaf, Lightbulb, Droplets, Sun, Zap, Sparkles, Trophy, Target, Gift, Star, CheckCircle } from 'lucide-react';
 
 interface EvidenceUploadProps {
@@ -15,21 +16,29 @@ interface EvidenceUploadProps {
 }
 
 export function EvidenceUpload({ businessType, onEvidenceUploaded, onBack }: EvidenceUploadProps) {
-  const [selectedType, setSelectedType] = useState('');
+  type BusinessType = EvidenceUploadProps['businessType'];
+  interface EcoActionOption {
+    value: string;
+    label: string;
+    impact: string;
+    icon: LucideIcon;
+  }
+
+  const [selectedType, setSelectedType] = useState<EcoActionOption['value'] | ''>('');
   const [description, setDescription] = useState('');
   const [cost, setCost] = useState('');
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
 
-  const getEcoActionsForBusiness = (type: string) => {
-    const common = [
+  const getEcoActionsForBusiness = (type: BusinessType): EcoActionOption[] => {
+    const common: EcoActionOption[] = [
       { value: 'led_lighting', label: 'LED Lighting Installation', impact: '~3.85 tCO₂/year saved', icon: Lightbulb },
       { value: 'solar_panel', label: 'Solar Panel System', impact: '~5.2 tCO₂/year saved', icon: Sun },
       { value: 'energy_efficient', label: 'Energy Efficient Equipment', impact: '~2.1 tCO₂/year saved', icon: Zap },
       { value: 'water_conservation', label: 'Water Conservation System', impact: '~2000L/month saved', icon: Droplets }
     ];
 
-    const specific = {
+    const specific: Record<BusinessType, EcoActionOption[]> = {
       farmer: [
         { value: 'solar_pump', label: 'Solar Water Pump', impact: '~4.3 tCO₂/year saved', icon: Sun },
         { value: 'drip_irrigation', label: 'Drip Irrigation System', impact: '~30% water savings', icon: Droplets },
@@ -43,13 +52,13 @@ export function EvidenceUpload({ businessType, onEvidenceUploaded, onBack }: Evi
         { value: 'inverter_welder', label: 'Inverter Welder', impact: '~8.6 tCO₂/year saved', icon: Zap },
         { value: 'led_workshop', label: 'LED Workshop Lighting', impact: '~2.4 tCO₂/year saved', icon: Lightbulb },
       ],
-      other: []
+      other: [],
     };
 
-    return [...common, ...(specific[type] || [])];
+    return [...common, ...specific[type]];
   };
 
-  const ecoActions = getEcoActionsForBusiness(businessType);
+  const ecoActions: EcoActionOption[] = getEcoActionsForBusiness(businessType);
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];

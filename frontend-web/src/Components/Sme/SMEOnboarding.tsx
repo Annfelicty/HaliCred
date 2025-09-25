@@ -3,9 +3,9 @@ import { Button } from '../Ui/button';
 import { Input } from '../Ui/input';
 import { Label } from '../Ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../Ui/card';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../Ui/select';
+// import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../Ui/select';
 import { Checkbox } from '../Ui/checkbox';
-import { ArrowLeft, Leaf, Tractor, Scissors, Zap, Building, Sparkles, CheckCircle, Shield, Smartphone, MapPin, Camera } from 'lucide-react';
+import { ArrowLeft, Leaf, Tractor, Scissors, Zap, Building, Sparkles, CheckCircle, Shield, Smartphone } from 'lucide-react';
 
 interface SMEOnboardingProps {
   onComplete: (userData: {

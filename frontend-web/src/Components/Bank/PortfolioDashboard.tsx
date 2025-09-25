@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { Button } from '../Ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../Ui/card';
 import { Badge } from '../Ui/badge';
@@ -7,15 +6,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../Ui/tabs';
 import { LoanApplication } from '../BankApp';
 import { 
   ArrowLeft, 
-  PieChart, 
   TrendingUp, 
   Download, 
   Leaf, 
   DollarSign,
   Users,
   MapPin,
-  Droplets,
-  Zap,
   BarChart3
 } from 'lucide-react';
 
@@ -25,7 +21,6 @@ interface PortfolioDashboardProps {
 }
 
 export function PortfolioDashboard({ applications, onBack }: PortfolioDashboardProps) {
-  const [timeframe, setTimeframe] = useState('month');
 
   // Calculate portfolio metrics
   const totalLoans = applications.filter(app => app.status === 'approved' || app.status === 'disbursed').length;

@@ -3,15 +3,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../Ui
 import { Badge } from '../Ui/badge';
 import { Progress } from '../Ui/progress';
 import { SMEUser } from '../SMEApp';
-import { 
-  Leaf, 
-  ArrowLeft, 
-  Upload, 
-  DollarSign, 
-  TrendingUp, 
-  Droplets, 
-  Zap, 
-  Recycle, 
+import {
+  Leaf,
+  ArrowLeft,
+  DollarSign,
+  TrendingUp,
+  Droplets,
+  Zap,
+  Recycle,
   User,
   Camera,
   CheckCircle,
@@ -23,6 +22,108 @@ import {
   Gift,
   Flame
 } from 'lucide-react';
+
+type LoanTone = 'pending' | 'approved' | 'active' | 'completed' | 'neutral';
+
+interface LoanStatusInfo {
+  label: string;
+  helper?: string;
+  tone: LoanTone;
+}
+
+const toneClasses: Record<LoanTone, { card: string; label: string; badge: string; helper: string }> = {
+  pending: {
+    card: 'border-yellow-200 bg-yellow-50',
+    label: 'text-yellow-800',
+    badge: 'bg-yellow-500/90 text-white',
+    helper: 'bg-yellow-100 border-yellow-200 text-yellow-800',
+  },
+  approved: {
+    card: 'border-emerald-200 bg-emerald-50',
+    label: 'text-emerald-800',
+    badge: 'bg-emerald-500/90 text-white',
+    helper: 'bg-emerald-100 border-emerald-200 text-emerald-800',
+  },
+  active: {
+    card: 'border-blue-200 bg-blue-50',
+    label: 'text-blue-800',
+    badge: 'bg-blue-500/90 text-white',
+    helper: 'bg-blue-100 border-blue-200 text-blue-800',
+  },
+  completed: {
+    card: 'border-green-200 bg-green-50',
+    label: 'text-green-800',
+    badge: 'bg-green-600 text-white',
+    helper: 'bg-green-100 border-green-200 text-green-800',
+  },
+  neutral: {
+    card: 'border-gray-200 bg-white',
+    label: 'text-gray-800',
+    badge: 'bg-gray-500/90 text-white',
+    helper: 'bg-gray-100 border-gray-200 text-gray-700',
+  },
+};
+
+const formatLabel = (value?: string | null) => {
+  if (!value) {
+    return 'Not specified';
+  }
+
+  return value
+    .split(/[\s_-]+/)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+};
+
+const resolveLoanStatus = (status: string | undefined): LoanStatusInfo => {
+  switch (status) {
+    case 'submitted':
+    case 'pending':
+      return {
+        label: 'Application Pending',
+        helper: "Your application is being reviewed. You'll be notified once a decision is made.",
+        tone: 'pending',
+      };
+    case 'approved':
+      return {
+        label: 'Approved',
+        helper: 'Awaiting disbursement to your account.',
+        tone: 'approved',
+      };
+    case 'disbursed':
+    case 'active':
+      return {
+        label: 'Active Loan',
+        helper: 'Keep making timely repayments to unlock greener benefits.',
+        tone: 'active',
+      };
+    case 'completed':
+    case 'settled':
+      return {
+        label: 'Loan Completed',
+        helper: 'Great work closing out your loan.',
+        tone: 'completed',
+      };
+    default:
+      return {
+        label: 'Loan Status',
+        tone: 'neutral',
+      };
+  }
+};
+
+const deriveDisplayRate = (quoted: number | null | undefined, fallback?: number) => {
+  if (typeof quoted === 'number') {
+    const normalized = quoted <= 1 ? quoted * 100 : quoted;
+    return Math.round(normalized * 100) / 100;
+  }
+
+  if (typeof fallback === 'number') {
+    return Math.round(fallback * 100) / 100;
+  }
+
+  return null;
+};
 
 interface SMEDashboardProps {
   user: SMEUser;
@@ -39,12 +140,6 @@ export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepaym
     return 'text-red-600';
   };
 
-  const getScoreBgColor = (score: number) => {
-    if (score >= 80) return 'bg-green-50';
-    if (score >= 60) return 'bg-yellow-50';
-    return 'bg-red-50';
-  };
-
   const ecoCategories = [
     { name: 'Energy', icon: Zap, score: Math.min(100, user.greenScore + Math.floor(Math.random() * 20)), color: 'text-yellow-600' },
     { name: 'Water', icon: Droplets, score: Math.min(100, user.greenScore + Math.floor(Math.random() * 20)), color: 'text-blue-600' },
@@ -59,8 +154,43 @@ export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepaym
     { action: 'Energy audit', points: '+12 pts', description: 'Professional assessment' }
   ];
 
-  const activeLoan = user.loanApplications.find(loan => loan.status === 'active');
-  const pendingLoan = user.loanApplications.find(loan => loan.status === 'pending');
+  const activeLoan = user.loanApplications.find((loan) => loan.backendStatus === 'active' || loan.backendStatus === 'disbursed');
+  const pendingLoan = user.loanApplications.find((loan) => loan.backendStatus === 'pending' || loan.backendStatus === 'submitted');
+  const fallbackLoan =
+    user.loanApplications.find((loan) => loan.backendStatus === 'approved') ??
+    user.loanApplications.find((loan) => loan.backendStatus === 'completed' || loan.backendStatus === 'settled') ??
+    user.loanApplications[0] ??
+    null;
+
+  const loanInFocus = activeLoan ?? pendingLoan ?? fallbackLoan;
+  const loanStatusInfo = resolveLoanStatus(loanInFocus?.backendStatus);
+  const tone = toneClasses[loanStatusInfo.tone];
+  const StatusIcon =
+    loanStatusInfo.tone === 'pending'
+      ? Clock
+      : loanStatusInfo.tone === 'neutral'
+      ? DollarSign
+      : CheckCircle;
+  const formattedCreatedAt = loanInFocus?.createdAt
+    ? new Date(loanInFocus.createdAt * 1000).toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      })
+    : null;
+  const formattedPurpose = formatLabel(loanInFocus?.purpose ?? null);
+  const loanRateDisplay = loanInFocus ? deriveDisplayRate(loanInFocus.quotedRate ?? null, loanInFocus.interestRate) : null;
+  const repaymentCta = loanInFocus
+    ? ['active', 'disbursed'].includes(loanInFocus.backendStatus)
+      ? 'View Repayments'
+      : loanInFocus.backendStatus === 'approved'
+      ? 'Prepare for Disbursement'
+      : ['pending', 'submitted'].includes(loanInFocus.backendStatus)
+      ? 'Track Application'
+      : loanInFocus.backendStatus === 'completed' || loanInFocus.backendStatus === 'settled'
+      ? 'View Completion Details'
+      : 'View Details'
+    : 'View Details';
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-green-50 to-teal-50 p-4 relative overflow-hidden">
@@ -183,7 +313,7 @@ export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepaym
 
         {/* Enhanced Category Tiles */}
         <div className="grid grid-cols-2 gap-3 animate-slide-up" style={{ animationDelay: '0.4s' }}>
-          {ecoCategories.map((category, index) => {
+          {ecoCategories.map((category) => {
             const Icon = category.icon;
             return (
               <Card key={category.name} className="group relative overflow-hidden bg-white/70 backdrop-blur-sm border border-white/50 shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105 hover:-rotate-1">
@@ -273,32 +403,59 @@ export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepaym
         </div>
 
         {/* Loan Status */}
-        {(activeLoan || pendingLoan) && (
-          <Card className="border-blue-200 bg-blue-50">
+        {loanInFocus && (
+          <Card className={tone.card}>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm text-blue-800 flex items-center space-x-2">
-                {activeLoan ? <CheckCircle className="w-4 h-4" /> : <Clock className="w-4 h-4" />}
-                <span>{activeLoan ? 'Active Loan' : 'Loan Application'}</span>
-              </CardTitle>
+              <div className="flex items-center justify-between">
+                <CardTitle className={`text-sm flex items-center space-x-2 ${tone.label}`}>
+                  <StatusIcon className="w-4 h-4" />
+                  <span>{loanStatusInfo.label}</span>
+                </CardTitle>
+                {loanInFocus.backendStatus && (
+                  <Badge className={`${tone.badge} uppercase tracking-wide text-[10px]`}>
+                    {formatLabel(loanInFocus.backendStatus)}
+                  </Badge>
+                )}
+              </div>
+              {formattedCreatedAt && (
+                <CardDescription className="text-xs text-gray-600">
+                  Requested on {formattedCreatedAt}
+                </CardDescription>
+              )}
             </CardHeader>
-            <CardContent className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span>Amount:</span>
-                <span className="font-medium">KES {(activeLoan || pendingLoan)!.amount.toLocaleString()}</span>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="text-gray-600">Loan Amount</p>
+                  <p className="text-lg font-bold">KES {loanInFocus.amount.toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Interest Rate</p>
+                  <p className={`text-lg font-bold ${loanRateDisplay != null ? 'text-green-600' : 'text-gray-500'}`}>
+                    {loanRateDisplay != null ? `${loanRateDisplay}% APR` : 'Rate pending'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Repayment Term</p>
+                  <p className="text-sm font-medium">{loanInFocus.term} months</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Purpose</p>
+                  <p className="text-sm font-medium">{formattedPurpose}</p>
+                </div>
               </div>
-              <div className="flex justify-between text-sm">
-                <span>Interest Rate:</span>
-                <span className="font-medium text-green-600">
-                  {(activeLoan || pendingLoan)!.interestRate}% APR
-                </span>
-              </div>
-              <Button 
+              {loanStatusInfo.helper && (
+                <div className={`p-3 rounded-lg border text-sm font-medium ${tone.helper}`}>
+                  {loanStatusInfo.helper}
+                </div>
+              )}
+              <Button
                 onClick={onViewRepayments}
                 variant="outline"
                 size="sm"
-                className="w-full mt-3 border-blue-600 text-blue-600 hover:bg-blue-100"
+                className="w-full border-blue-600 text-blue-600 hover:bg-blue-100"
               >
-                {activeLoan ? 'View Repayments' : 'Check Status'}
+                {repaymentCta}
               </Button>
             </CardContent>
           </Card>

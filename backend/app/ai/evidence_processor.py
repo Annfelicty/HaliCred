@@ -13,10 +13,20 @@ except ImportError:
     pytesseract = None
     Image = None
     cv2 = None
+
+try:
+    from google.cloud import vision
+    from google.oauth2 import service_account
+    import google.auth
+except ImportError:
+    vision = None
+
 import numpy as np
 import requests
 from datetime import datetime
 import re
+import json
+import base64
 
 from .models import EvidenceData, OCRResult, CVResult, ProcessedEvidence
 
@@ -27,6 +37,16 @@ class EvidenceProcessor:
     
     def __init__(self, google_vision_api_key: Optional[str] = None):
         self.google_vision_api_key = google_vision_api_key
+        self.vision_client = None
+        
+        # Initialize Google Vision client if available
+        if vision and google_vision_api_key:
+            try:
+                # Create credentials from API key for Vision API
+                self.vision_client = self._create_vision_client()
+            except Exception as e:
+                logger.warning(f"Failed to initialize Google Vision client: {e}")
+                self.vision_client = None
         
         # Vendor patterns for OCR validation
         self.vendor_patterns = {

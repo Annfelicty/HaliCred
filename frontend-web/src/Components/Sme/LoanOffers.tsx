@@ -1,42 +1,119 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '../Ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../Ui/card';
 import { Badge } from '../Ui/badge';
 import { Slider } from '../Ui/slider';
 import { Label } from '../Ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../Ui/select';
+import { loans } from '../../lib/api';
 import { SMEUser } from '../SMEApp';
-import { ArrowLeft, DollarSign, TrendingDown, Clock, CheckCircle, Calculator } from 'lucide-react';
+import { ArrowLeft, DollarSign, TrendingDown, Clock, CheckCircle, Calculator, AlertCircle } from 'lucide-react';
+
+interface LoanQuoteOption {
+  tenor: number;
+  rate: number;
+  discount_reason?: string;
+}
 
 interface LoanOffersProps {
   user: SMEUser;
   onBack: () => void;
   onApplyForLoan: (loan: {
     amount: number;
-    interestRate: number;
     term: number;
     purpose: string;
-  }) => void;
+    estimatedRate: number;
+  }) => Promise<void> | void;
 }
 
+const BASELINE_RATE = 18; // Reference standard rate (percentage)
+
+const toDisplayRate = (value: number | null | undefined): number | null => {
+  if (typeof value !== 'number') {
+    return null;
+  }
+  const normalized = value <= 1 ? value * 100 : value;
+  return Math.round(normalized * 100) / 100;
+};
+
+const calculateMonthlyPayment = (amount: number, ratePercent: number, termMonths: number): number => {
+  if (termMonths <= 0 || amount <= 0) {
+    return 0;
+  }
+  const monthlyRate = ratePercent / 100 / 12;
+  if (monthlyRate <= 0) {
+    return amount / termMonths;
+  }
+  const numerator = amount * monthlyRate * Math.pow(1 + monthlyRate, termMonths);
+  const denominator = Math.pow(1 + monthlyRate, termMonths) - 1;
+  if (denominator === 0) {
+    return amount / termMonths;
+  }
+  return numerator / denominator;
+};
+
 export function LoanOffers({ user, onBack, onApplyForLoan }: LoanOffersProps) {
-  const [selectedAmount, setSelectedAmount] = useState([50000]);
-  const [selectedTerm, setSelectedTerm] = useState('12');
-  const [loanPurpose, setLoanPurpose] = useState('');
-  const [showCalculator, setShowCalculator] = useState(false);
+  const [selectedAmount, setSelectedAmount] = useState<number[]>([50000]);
+  const [selectedTerm, setSelectedTerm] = useState<string>('12');
+  const [loanPurpose, setLoanPurpose] = useState<string>('');
+  const [quoteOptions, setQuoteOptions] = useState<LoanQuoteOption[]>([]);
+  const [loadingQuotes, setLoadingQuotes] = useState<boolean>(false);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState<boolean>(false);
 
-  // Calculate interest rate based on GreenScore
-  const baseRate = 18; // Base rate in Kenya
-  const getDiscountedRate = (greenScore: number) => {
-    if (greenScore >= 80) return baseRate - 6; // 12%
-    if (greenScore >= 70) return baseRate - 4; // 14%
-    if (greenScore >= 60) return baseRate - 3; // 15%
-    if (greenScore >= 50) return baseRate - 2; // 16%
-    return baseRate - 1; // 17%
-  };
+  useEffect(() => {
+    let isMounted = true;
+    const fetchQuotes = async () => {
+      const amount = selectedAmount[0];
+      const tenor = parseInt(selectedTerm, 10);
+      if (!Number.isFinite(amount) || !Number.isFinite(tenor)) {
+        return;
+      }
+      setLoadingQuotes(true);
+      setQuoteError(null);
+      try {
+        const response = await loans.getLoanOffers({ amount, tenor });
+        if (!isMounted) {
+          return;
+        }
+        if (response && Array.isArray(response.options)) {
+          setQuoteOptions(response.options);
+        } else {
+          setQuoteOptions([]);
+          setQuoteError('No loan offers are currently available for the selected amount and term.');
+        }
+      } catch (error) {
+        console.error('Failed to fetch loan quotes:', error);
+        if (isMounted) {
+          setQuoteOptions([]);
+          setQuoteError(error instanceof Error ? error.message : 'Failed to load loan offers.');
+        }
+      } finally {
+        if (isMounted) {
+          setLoadingQuotes(false);
+        }
+      }
+    };
 
-  const discountedRate = getDiscountedRate(user.greenScore);
-  const savings = baseRate - discountedRate;
+    fetchQuotes();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedAmount, selectedTerm]);
+
+  const activeQuote = useMemo(() => {
+    const tenor = parseInt(selectedTerm, 10);
+    return quoteOptions.find((option) => option.tenor === tenor) ?? quoteOptions[0] ?? null;
+  }, [quoteOptions, selectedTerm]);
+
+  const quotedRate = useMemo(() => toDisplayRate(activeQuote?.rate), [activeQuote]);
+  const appliedRate = quotedRate ?? Math.round((BASELINE_RATE - Math.max(0, Math.min(user.greenScore - 50, 30)) / 2) * 100) / 100;
+  const rateSavings = quotedRate != null ? Math.max(0, Math.round((BASELINE_RATE - quotedRate) * 100) / 100) : null;
+
+  const monthlyPayment = calculateMonthlyPayment(selectedAmount[0], appliedRate, parseInt(selectedTerm, 10));
+  const totalPayment = monthlyPayment * parseInt(selectedTerm, 10);
+  const totalInterest = totalPayment - selectedAmount[0];
 
   const loanPurposes = {
     farmer: [
@@ -67,26 +144,22 @@ export function LoanOffers({ user, onBack, onApplyForLoan }: LoanOffersProps) {
 
   const purposes = loanPurposes[user.businessType] || loanPurposes.other;
 
-  const calculateMonthlyPayment = (amount: number, rate: number, termMonths: number) => {
-    const monthlyRate = rate / 100 / 12;
-    const payment = (amount * monthlyRate * Math.pow(1 + monthlyRate, termMonths)) / 
-                   (Math.pow(1 + monthlyRate, termMonths) - 1);
-    return payment;
-  };
+  const handleApply = async () => {
+    if (!loanPurpose || submitting) {
+      return;
+    }
+    const amount = selectedAmount[0];
+    const term = parseInt(selectedTerm, 10);
+    const estimatedRate = appliedRate;
 
-  const monthlyPayment = calculateMonthlyPayment(selectedAmount[0], discountedRate, parseInt(selectedTerm));
-  const totalPayment = monthlyPayment * parseInt(selectedTerm);
-  const totalInterest = totalPayment - selectedAmount[0];
-
-  const handleApply = () => {
-    if (!loanPurpose) return;
-    
-    onApplyForLoan({
-      amount: selectedAmount[0],
-      interestRate: discountedRate,
-      term: parseInt(selectedTerm),
-      purpose: loanPurpose
-    });
+    try {
+      setSubmitting(true);
+      await onApplyForLoan({ amount, term, purpose: loanPurpose, estimatedRate });
+    } catch (error) {
+      console.error('Loan application failed:', error);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -104,6 +177,18 @@ export function LoanOffers({ user, onBack, onApplyForLoan }: LoanOffersProps) {
           <div className="w-10" />
         </div>
 
+        {quoteError && (
+          <Card className="border-red-200 bg-red-50">
+            <CardContent className="flex items-start space-x-3 py-4">
+              <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-red-700">{quoteError}</p>
+                <p className="text-xs text-red-600">Modify your amount or term and try again.</p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* GreenScore Benefits */}
         <Card className="border-green-200 bg-green-50">
           <CardContent className="pt-4">
@@ -112,18 +197,23 @@ export function LoanOffers({ user, onBack, onApplyForLoan }: LoanOffersProps) {
                 <span className="text-sm font-medium text-green-800">Your GreenScore</span>
                 <Badge className="bg-green-600 text-white">{user.greenScore}</Badge>
               </div>
-              
               <div className="flex items-center space-x-2">
                 <TrendingDown className="w-5 h-5 text-green-600" />
                 <div>
                   <p className="text-sm font-medium text-green-800">
-                    {savings}% Interest Discount Applied!
+                    {rateSavings != null && rateSavings > 0
+                      ? `${rateSavings}% Interest Discount Applied!`
+                      : 'Personalized rate based on your GreenScore'}
                   </p>
                   <p className="text-xs text-green-700">
-                    Standard rate: {baseRate}% → Your rate: {discountedRate}%
+                    Standard rate: {BASELINE_RATE}% → Your rate:{' '}
+                    {quotedRate != null ? `${quotedRate}%` : `${appliedRate}%`}
                   </p>
                 </div>
               </div>
+              {loadingQuotes && (
+                <p className="text-xs text-green-600">Fetching the best offers for you…</p>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -138,7 +228,6 @@ export function LoanOffers({ user, onBack, onApplyForLoan }: LoanOffersProps) {
             <CardDescription>Customize your loan amount and terms</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            {/* Loan Amount */}
             <div className="space-y-3">
               <Label>Loan Amount: KES {selectedAmount[0].toLocaleString()}</Label>
               <Slider
@@ -155,7 +244,6 @@ export function LoanOffers({ user, onBack, onApplyForLoan }: LoanOffersProps) {
               </div>
             </div>
 
-            {/* Loan Term */}
             <div className="space-y-2">
               <Label>Repayment Period</Label>
               <Select value={selectedTerm} onValueChange={setSelectedTerm}>
@@ -172,7 +260,6 @@ export function LoanOffers({ user, onBack, onApplyForLoan }: LoanOffersProps) {
               </Select>
             </div>
 
-            {/* Loan Purpose */}
             <div className="space-y-2">
               <Label>Loan Purpose</Label>
               <Select value={loanPurpose} onValueChange={setLoanPurpose}>
@@ -201,25 +288,25 @@ export function LoanOffers({ user, onBack, onApplyForLoan }: LoanOffersProps) {
               <div>
                 <p className="text-gray-600">Monthly Payment</p>
                 <p className="text-lg font-bold text-blue-800">
-                  KES {monthlyPayment.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                  KES {monthlyPayment.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                 </p>
               </div>
               <div>
                 <p className="text-gray-600">Interest Rate</p>
                 <p className="text-lg font-bold text-green-600">
-                  {discountedRate}% APR
+                  {appliedRate}% APR
                 </p>
               </div>
               <div>
                 <p className="text-gray-600">Total Interest</p>
                 <p className="text-sm font-medium">
-                  KES {totalInterest.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                  KES {totalInterest.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                 </p>
               </div>
               <div>
                 <p className="text-gray-600">Total Payment</p>
                 <p className="text-sm font-medium">
-                  KES {totalPayment.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                  KES {totalPayment.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                 </p>
               </div>
             </div>
@@ -228,7 +315,12 @@ export function LoanOffers({ user, onBack, onApplyForLoan }: LoanOffersProps) {
               <div className="flex items-center space-x-2 text-green-600">
                 <CheckCircle className="w-4 h-4" />
                 <span className="text-sm font-medium">
-                  You save KES {((monthlyPayment * parseInt(selectedTerm) * savings / 100)).toLocaleString(undefined, {maximumFractionDigits: 0})} vs standard rate
+                  {rateSavings != null && rateSavings > 0
+                    ? `You save approximately KES ${(
+                        monthlyPayment * parseInt(selectedTerm, 10) * rateSavings
+                      / BASELINE_RATE
+                      ).toLocaleString(undefined, { maximumFractionDigits: 0 })} vs standard rate`
+                    : 'Optimized repayment plan tailored to your GreenScore'}
                 </span>
               </div>
             </div>
@@ -261,12 +353,12 @@ export function LoanOffers({ user, onBack, onApplyForLoan }: LoanOffersProps) {
         </Card>
 
         {/* Apply Button */}
-        <Button 
+        <Button
           onClick={handleApply}
-          disabled={!loanPurpose}
+          disabled={!loanPurpose || submitting || loadingQuotes}
           className="w-full bg-green-600 hover:bg-green-700 h-12"
         >
-          Apply for Loan
+          {submitting ? 'Submitting...' : 'Apply for Loan'}
         </Button>
 
         <div className="text-center">

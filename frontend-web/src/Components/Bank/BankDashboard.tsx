@@ -6,9 +6,7 @@ import { BankUser, LoanApplication } from '../BankApp';
 import { 
   ArrowLeft, 
   Building2, 
-  Users, 
   DollarSign, 
-  TrendingUp, 
   FileText, 
   PieChart, 
   AlertTriangle,

@@ -21,7 +21,7 @@ EVIDENCE = {}
 SCORES = {}
 LOANS = {}
 
-security = HTTPBearer()
+security = HTTPBearer(auto_error=False)
 
 # Initialize Celery
 celery_app = Celery(
@@ -51,6 +51,9 @@ def get_or_create_user(phone, full_name=None):
     return user
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    if credentials is None or not credentials.credentials:
+        raise HTTPException(401, "Authentication credentials were not provided")
+
     token = credentials.credentials
     try:
         # For development, use a simple token
@@ -58,8 +61,14 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
             return {"id": "dev-user-id", "roles": ["borrower"]}
         
         # In production, decode JWT
-        public_key = Path(os.environ.get("JWT_PUBLIC_KEY_PATH", "jwtRS256.key.pub")).read_text()
-        claims = jwt.decode(token, public_key, algorithms=["RS256"])
+        key_path = Path(os.environ.get("JWT_PUBLIC_KEY_PATH", "jwtRS256.key.pub"))
+        if key_path.exists():
+            public_key = key_path.read_text()
+            algorithms = ["RS256"]
+        else:
+            public_key = os.environ.get("JWT_SECRET_KEY", "dev-secret-key")
+            algorithms = [os.environ.get("JWT_ALGORITHM", "HS256")]
+        claims = jwt.decode(token, public_key, algorithms=algorithms, options={"verify_aud": False})
         return USERS.get(claims["sub"], {"id": claims["sub"], "roles": claims.get("roles", [])})
     except Exception:
         raise HTTPException(401, "Invalid token")
@@ -67,7 +76,7 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
 def require_role(role):
     def checker(user=Depends(get_current_user)):
         if role not in user.get("roles", []):
-            raise HTTPException(403, "Forbidden")
+            raise HTTPException(401, "Authentication required for this operation")
         return user
     return checker
 

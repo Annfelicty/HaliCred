@@ -3,6 +3,7 @@
  * Handles all HTTP requests to the FastAPI backend
  */
 import axios from 'axios';
+import type { AxiosError } from 'axios';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
@@ -45,31 +46,52 @@ apiClient.interceptors.response.use(
 export interface User {
   id: string;
   phone: string;
+  email?: string;
   full_name: string;
   roles: string[];
   created_at: string;
 }
 
-export interface LoginRequest {
-  phone: string;
-  password: string;
+export interface OTPRequest {
+  phone?: string;
+  email?: string;
 }
 
-export interface RegisterRequest {
-  phone: string;
-  full_name: string;
+export interface VerifyOtpRequest extends OTPRequest {
+  code: string;
+  full_name?: string;
+  password?: string;
+  roles?: string[];
+}
+
+export interface PasswordLoginRequest {
+  phone?: string;
+  email?: string;
   password: string;
-  business_type?: string;
-  business_name?: string;
 }
 
 export interface BusinessProfile {
   business_type: string;
   business_name: string;
-  location?: {
-    latitude: number;
-    longitude: number;
-  };
+  location?: string;
+  full_name?: string;
+  phone?: string;
+  email?: string;
+}
+
+export interface AuthSuccessResponse {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  user: User;
+  last_otp_verified_at?: string | null;
+  last_login_at?: string | null;
+}
+
+export interface OTPResponse {
+  status: string;
+  message: string;
+  expires_in: number;
 }
 
 export interface EvidenceUpload {
@@ -118,52 +140,88 @@ export interface CarbonCreditsPortfolio {
   }>;
 }
 
-export interface LoanApplication {
+export interface LoanRecord {
   id: string;
-  user_id: string;
-  amount_requested: number;
-  purpose: string;
+  amount: number;
+  tenor: number;
   status: string;
-  greenscore_at_application: number;
-  created_at: string;
+  quoted_rate?: number | null;
+  purpose?: string | null;
+  created_at?: number | null;
+  greenscore_snapshot?: Record<string, unknown> | null;
 }
 
 // API Functions
 
 // Authentication
+const normalizeError = (error: unknown): never => {
+  if (axios.isAxiosError(error)) {
+    const axiosError = error as AxiosError<{ detail?: string }>;
+    const message = axiosError.response?.data?.detail || axiosError.message || 'Request failed';
+    throw new Error(message);
+  }
+  if (error instanceof Error) {
+    throw error;
+  }
+  throw new Error('Unknown error');
+};
+
 export const auth = {
-  login: async (credentials: LoginRequest) => {
-    const formData = new FormData();
-    formData.append('username', credentials.phone);
-    formData.append('password', credentials.password);
-    
-    const response = await apiClient.post('/auth/token', formData, {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-    });
-    return response.data;
+  requestOtp: async (payload: OTPRequest): Promise<OTPResponse> => {
+    try {
+      const response = await apiClient.post('/auth/otp', payload);
+      return response.data;
+    } catch (error) {
+      throw normalizeError(error);
+    }
   },
 
-  register: async (userData: RegisterRequest) => {
-    const response = await apiClient.post('/auth/register', userData);
-    return response.data;
+  verifyOtp: async (payload: VerifyOtpRequest): Promise<AuthSuccessResponse> => {
+    try {
+      const response = await apiClient.post('/auth/verify', payload);
+      return response.data;
+    } catch (error) {
+      throw normalizeError(error);
+    }
+  },
+
+  loginWithPassword: async (payload: PasswordLoginRequest): Promise<AuthSuccessResponse> => {
+    try {
+      const response = await apiClient.post('/auth/login', payload);
+      return response.data;
+    } catch (error) {
+      throw normalizeError(error);
+    }
   },
 
   getCurrentUser: async (): Promise<User> => {
-    const response = await apiClient.get('/profile/me');
-    return response.data;
+    try {
+      const response = await apiClient.get('/me');
+      return response.data;
+    } catch (error) {
+      throw normalizeError(error);
+    }
   },
 };
 
 // Profile Management
 export const profile = {
   updateProfile: async (profileData: Partial<BusinessProfile>) => {
-    const response = await apiClient.put('/profile/business', profileData);
-    return response.data;
+    try {
+      const response = await apiClient.patch('/me/profile', profileData);
+      return response.data;
+    } catch (error) {
+      throw normalizeError(error);
+    }
   },
 
   getProfile: async () => {
-    const response = await apiClient.get('/profile/business');
-    return response.data;
+    try {
+      const response = await apiClient.get('/me');
+      return response.data;
+    } catch (error) {
+      throw normalizeError(error);
+    }
   },
 };
 
@@ -208,24 +266,40 @@ export const ai = {
 
 // Loan Management
 export const loans = {
-  applyForLoan: async (loanData: { amount: number; purpose: string }) => {
-    const response = await apiClient.post('/loans/apply', loanData);
-    return response.data;
+  applyForLoan: async (loanData: { amount: number; tenor: number; purpose?: string }) => {
+    try {
+      const response = await apiClient.post('/loan/apply', loanData);
+      return response.data;
+    } catch (error) {
+      throw normalizeError(error);
+    }
   },
 
-  getUserLoans: async () => {
-    const response = await apiClient.get('/loans/my-loans');
-    return response.data;
+  getUserLoans: async (): Promise<LoanRecord[]> => {
+    try {
+      const response = await apiClient.get('/loan/my');
+      return response.data;
+    } catch (error) {
+      throw normalizeError(error);
+    }
   },
 
-  getLoanOffers: async () => {
-    const response = await apiClient.get('/loans/offers');
-    return response.data;
+  getLoanOffers: async (payload: { amount: number; tenor: number }) => {
+    try {
+      const response = await apiClient.post('/loan/quote', payload);
+      return response.data;
+    } catch (error) {
+      throw normalizeError(error);
+    }
   },
 
   acceptLoanOffer: async (loanId: string) => {
-    const response = await apiClient.post(`/loans/${loanId}/accept`);
-    return response.data;
+    try {
+      const response = await apiClient.post(`/admin/applications/${loanId}/decision`, { decision: 'approve' });
+      return response.data;
+    } catch (error) {
+      throw normalizeError(error);
+    }
   },
 };
 

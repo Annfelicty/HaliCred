@@ -3,13 +3,34 @@
  * Manages user authentication state and operations
  */
 import React, { useState, useEffect, createContext, useContext, ReactNode } from 'react';
-import { auth, User } from '../lib/api';
+import { auth, User, OTPResponse, AuthSuccessResponse } from '../lib/api';
+
+type OtpStage = 'idle' | 'code_sent' | 'verifying';
+type ContactType = 'phone' | 'email';
+
+interface AuthContact {
+  type: ContactType;
+  value: string;
+}
+
+interface VerifyParams {
+  code: string;
+  fullName?: string;
+  password?: string;
+  roles?: string[];
+}
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (phone: string, password: string) => Promise<void>;
-  register: (phone: string, fullName: string, password: string, businessType?: string, businessName?: string) => Promise<void>;
+  otpStage: OtpStage;
+  contact: AuthContact | null;
+  lastOtpVerifiedAt: string | null;
+  requestOtp: (contact: AuthContact) => Promise<OTPResponse | void>;
+  verifyOtp: (params: VerifyParams) => Promise<AuthSuccessResponse | void>;
+  loginWithPassword: (password: string, contactOverride?: AuthContact) => Promise<AuthSuccessResponse | void>;
+  setContact: (contact: AuthContact | null) => void;
+  canLoginWithPassword: (contactType?: ContactType) => boolean;
   logout: () => void;
   isAuthenticated: boolean;
 }
@@ -24,14 +45,26 @@ export const useAuth = () => {
   return context;
 };
 
+const CONTACT_STORAGE_KEY = 'auth_contact';
+const LAST_OTP_STORAGE_KEY = 'last_otp_verified_at';
+const SME_GRACE_MS = 6 * 60 * 60 * 1000;
+const BANK_GRACE_MS = 12 * 60 * 60 * 1000;
+
+const getGraceForType = (type: ContactType) => (type === 'email' ? BANK_GRACE_MS : SME_GRACE_MS);
+
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [otpStage, setOtpStage] = useState<OtpStage>('idle');
+  const [contact, setContactState] = useState<AuthContact | null>(null);
+  const [lastOtpVerifiedAt, setLastOtpVerifiedAtState] = useState<string | null>(null);
 
   useEffect(() => {
     // Check for existing token on app load
     const token = localStorage.getItem('access_token');
     const savedUser = localStorage.getItem('user');
+    const savedContactRaw = localStorage.getItem(CONTACT_STORAGE_KEY);
+    const savedLastOtp = localStorage.getItem(LAST_OTP_STORAGE_KEY);
     
     if (token && savedUser) {
       try {
@@ -54,61 +87,157 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setUser(null);
       }
     }
+
+    if (savedContactRaw) {
+      try {
+        const parsed = JSON.parse(savedContactRaw) as AuthContact;
+        setContactState(parsed);
+      } catch (error) {
+        localStorage.removeItem(CONTACT_STORAGE_KEY);
+      }
+    }
+
+    if (savedLastOtp) {
+      setLastOtpVerifiedAtState(savedLastOtp);
+    }
     setLoading(false);
   }, []);
 
-  const login = async (phone: string, password: string) => {
-    try {
-      const response = await auth.login({ phone, password });
-      const { access_token } = response;
-      
-      localStorage.setItem('access_token', access_token);
-      
-      // Get user data
-      const userData = await auth.getCurrentUser();
-      setUser(userData);
-      localStorage.setItem('user', JSON.stringify(userData));
-    } catch (error) {
-      console.error('Login failed:', error);
-      throw error;
+  const storeContact = (nextContact: AuthContact | null) => {
+    setContactState(nextContact);
+    if (nextContact) {
+      localStorage.setItem(CONTACT_STORAGE_KEY, JSON.stringify(nextContact));
+    } else {
+      localStorage.removeItem(CONTACT_STORAGE_KEY);
     }
   };
 
-  const register = async (
-    phone: string, 
-    fullName: string, 
-    password: string, 
-    businessType?: string, 
-    businessName?: string
-  ) => {
+  const storeLastOtpVerifiedAt = (timestamp: string | null) => {
+    setLastOtpVerifiedAtState(timestamp);
+    if (timestamp) {
+      localStorage.setItem(LAST_OTP_STORAGE_KEY, timestamp);
+    } else {
+      localStorage.removeItem(LAST_OTP_STORAGE_KEY);
+    }
+  };
+
+  const requestOtp = async (nextContact: AuthContact) => {
     try {
-      await auth.register({
-        phone,
+      setLoading(true);
+      storeContact(nextContact);
+      await auth.requestOtp(
+        nextContact.type === 'phone'
+          ? { phone: nextContact.value }
+          : { email: nextContact.value }
+      );
+      setOtpStage('code_sent');
+    } catch (error) {
+      console.error('OTP request failed:', error);
+      throw error;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const verifyOtp = async ({ code, fullName, password, roles }: VerifyParams) => {
+    try {
+      if (!contact) {
+        throw new Error('Contact is required before verifying OTP');
+      }
+      setLoading(true);
+      setOtpStage('verifying');
+
+      const response = await auth.verifyOtp({
+        ...(contact.type === 'phone' ? { phone: contact.value } : { email: contact.value }),
+        code,
         full_name: fullName,
         password,
-        business_type: businessType,
-        business_name: businessName,
+        roles,
       });
-      
-      // Auto-login after registration
-      await login(phone, password);
+
+      const { access_token, user: userInfo, last_otp_verified_at } = response;
+
+      localStorage.setItem('access_token', access_token);
+      localStorage.setItem('user', JSON.stringify(userInfo));
+      setUser(userInfo);
+      storeLastOtpVerifiedAt(last_otp_verified_at || new Date().toISOString());
+      setOtpStage('idle');
+      return response;
     } catch (error) {
-      console.error('Registration failed:', error);
+      console.error('OTP verification failed:', error);
       throw error;
+    } finally {
+      setLoading(false);
     }
+  };
+
+  const loginWithPassword = async (password: string, contactOverride?: AuthContact) => {
+    try {
+      setLoading(true);
+      const targetContact = contactOverride || contact;
+      if (!targetContact) {
+        throw new Error('Contact is required before password login');
+      }
+
+      storeContact(targetContact);
+      const response = await auth.loginWithPassword({
+        ...(targetContact.type === 'phone'
+          ? { phone: targetContact.value }
+          : { email: targetContact.value }),
+        password,
+      });
+
+      localStorage.setItem('access_token', response.access_token);
+      localStorage.setItem('user', JSON.stringify(response.user));
+      if (response.last_otp_verified_at) {
+        storeLastOtpVerifiedAt(response.last_otp_verified_at);
+      }
+      setUser(response.user);
+      setOtpStage('idle');
+      return response;
+    } catch (error) {
+      console.error('Password login failed:', error);
+      throw error;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const canLoginWithPassword = (contactType?: ContactType) => {
+    const type = contactType || contact?.type;
+    if (!type || !lastOtpVerifiedAt) {
+      return false;
+    }
+    const gracePeriod = getGraceForType(type);
+    const lastVerifiedTime = new Date(lastOtpVerifiedAt).getTime();
+    if (Number.isNaN(lastVerifiedTime)) {
+      return false;
+    }
+    return Date.now() - lastVerifiedTime <= gracePeriod;
   };
 
   const logout = () => {
     localStorage.removeItem('access_token');
     localStorage.removeItem('user');
+    localStorage.removeItem(CONTACT_STORAGE_KEY);
+    localStorage.removeItem(LAST_OTP_STORAGE_KEY);
     setUser(null);
+    setOtpStage('idle');
+    setContactState(null);
+    setLastOtpVerifiedAtState(null);
   };
 
   const value = {
     user,
     loading,
-    login,
-    register,
+    otpStage,
+    contact,
+    lastOtpVerifiedAt,
+    requestOtp,
+    verifyOtp,
+    loginWithPassword,
+    setContact: storeContact,
+    canLoginWithPassword,
     logout,
     isAuthenticated: !!user,
   };

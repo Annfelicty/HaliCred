@@ -34,7 +34,8 @@ async def create_evidence(
         Dict with evidence ID and upload URL
     """
     try:
-        evidence_id = str(uuid.uuid4())
+        evidence_uuid = uuid.uuid4()
+        evidence_id = str(evidence_uuid)
         key = f"evidence/{user.id}/{evidence_id}.jpg"
         
         # Generate presigned URL for upload
@@ -42,7 +43,7 @@ async def create_evidence(
         
         # Create evidence record in database
         evidence = Evidence(
-            id=evidence_id,
+            id=evidence_uuid,
             user_id=user.id,
             s3_key=key,
             status="pending"

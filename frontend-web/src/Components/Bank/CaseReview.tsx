@@ -11,14 +11,12 @@ import {
   XCircle, 
   AlertTriangle, 
   FileText, 
-  Image, 
   MapPin, 
   Satellite,
   Eye,
   Camera,
   Shield,
-  TrendingUp,
-  DollarSign
+  TrendingUp
 } from 'lucide-react';
 
 interface CaseReviewProps {
@@ -30,7 +28,6 @@ interface CaseReviewProps {
 export function CaseReview({ application, onBack, onDecision }: CaseReviewProps) {
   const [decision, setDecision] = useState<'approve' | 'reject' | 'request_more_info' | ''>('');
   const [comment, setComment] = useState('');
-  const [selectedEvidence, setSelectedEvidence] = useState<string | null>(null);
 
   const handleSubmitDecision = () => {
     if (!decision || !comment) return;
@@ -136,7 +133,7 @@ export function CaseReview({ application, onBack, onDecision }: CaseReviewProps)
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                {application.ecoActions.map((action, index) => (
+                {application.ecoActions.map((action) => (
                   <div key={action.id} className="border border-slate-200 rounded-lg p-4 space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="space-y-1">
@@ -182,7 +179,7 @@ export function CaseReview({ application, onBack, onDecision }: CaseReviewProps)
                       <Button 
                         variant="outline" 
                         size="sm"
-                        onClick={() => setSelectedEvidence(action.evidence)}
+                        onClick={() => window.open(action.evidence, '_blank')}
                       >
                         <Eye className="w-4 h-4 mr-2" />
                         View

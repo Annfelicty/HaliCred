@@ -1,23 +1,11 @@
 import { useState } from 'react';
 import { Button } from '../Ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../Ui/card';
+import { Card, CardContent } from '../Ui/card';
 import { Badge } from '../Ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../Ui/select';
 import { Input } from '../Ui/input';
 import { LoanApplication } from '../BankApp';
-import { 
-  ArrowLeft, 
-  Search, 
-  Filter, 
-  Eye, 
-  Clock, 
-  AlertTriangle, 
-  CheckCircle,
-  TrendingUp,
-  MapPin,
-  DollarSign,
-  Calendar
-} from 'lucide-react';
+import { ArrowLeft, Search, Filter, Eye, Clock, AlertTriangle, CheckCircle, MapPin, Calendar } from 'lucide-react';
 
 interface ApplicationQueueProps {
   applications: LoanApplication[];
