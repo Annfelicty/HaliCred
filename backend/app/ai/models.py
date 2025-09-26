@@ -15,6 +15,21 @@ class EvidenceData(BaseModel):
     geo: Optional[Dict[str, float]] = None  # {"lat": -1.2921, "lon": 36.8219}
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
+class BoundingBox(BaseModel):
+    """Bounding box coordinates for OCR annotations"""
+    left: float
+    top: float
+    width: float
+    height: float
+
+
+class OCRLine(BaseModel):
+    """Structured OCR line with bounding box"""
+    text: str
+    confidence: float
+    bounding_box: Optional[BoundingBox] = None
+
+
 class OCRResult(BaseModel):
     """OCR extraction results"""
     vendor: Optional[str] = None
@@ -23,6 +38,8 @@ class OCRResult(BaseModel):
     items: List[str] = Field(default_factory=list)
     confidence: float = 0.0
     raw_text: str = ""
+    lines: List[OCRLine] = Field(default_factory=list)
+    provenance: Dict[str, Any] = Field(default_factory=dict)
 
 class CVResult(BaseModel):
     """Computer Vision analysis results"""
@@ -30,17 +47,6 @@ class CVResult(BaseModel):
     caption: str = ""
     confidence: float = 0.0
     detected_objects: List[Dict[str, Any]] = Field(default_factory=list)
-
-class ProcessedEvidence(BaseModel):
-    """Processed evidence with OCR and CV results"""
-    evidence_id: str
-    user_id: str
-    type: str
-    ocr: OCRResult
-    cv: CVResult
-    geo: Optional[Dict[str, float]] = None
-    timestamp: datetime
-    processing_confidence: float = 0.0
 
 class EmissionFeatures(BaseModel):
     """Features for emission calculation"""
@@ -50,6 +56,19 @@ class EmissionFeatures(BaseModel):
     water_m3_saved: Optional[float] = None
     solar_kwh_generated: Optional[float] = None
     appliance_efficiency_gain: Optional[float] = None
+
+
+class ProcessedEvidence(BaseModel):
+    """Processed evidence with OCR and CV results"""
+    evidence_id: str
+    user_id: str
+    type: str
+    ocr: OCRResult
+    cv: CVResult
+    features: Optional[EmissionFeatures] = None
+    geo: Optional[Dict[str, float]] = None
+    timestamp: datetime
+    processing_confidence: float = 0.0
 
 class EmissionResult(BaseModel):
     """CO2 emission calculation result"""

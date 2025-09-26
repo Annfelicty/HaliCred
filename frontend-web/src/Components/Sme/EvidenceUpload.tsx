@@ -8,6 +8,7 @@ import { Textarea } from '../Ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../Ui/select';
 import type { LucideIcon } from 'lucide-react';
 import { ArrowLeft, Camera, Upload, Leaf, Lightbulb, Droplets, Sun, Zap, Sparkles, Trophy, Target, Gift, Star, CheckCircle } from 'lucide-react';
+import { ai } from '../../lib/api';
 
 interface EvidenceUploadProps {
   businessType: 'farmer' | 'salon' | 'welding' | 'other';
@@ -29,6 +30,9 @@ export function EvidenceUpload({ businessType, onEvidenceUploaded, onBack }: Evi
   const [cost, setCost] = useState('');
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [processingMeta, setProcessingMeta] = useState<{ greenscore?: number | null; confidence?: number | null; requestId?: string } | null>(null);
 
   const getEcoActionsForBusiness = (type: BusinessType): EcoActionOption[] => {
     const common: EcoActionOption[] = [
@@ -64,6 +68,22 @@ export function EvidenceUpload({ businessType, onEvidenceUploaded, onBack }: Evi
     const file = event.target.files?.[0];
     if (file) {
       setUploadedFile(file);
+      setProcessingMeta(null);
+      setSuccessMessage(null);
+      setError(null);
+    }
+  };
+
+  const resolveBackendSector = (type: BusinessType): string => {
+    switch (type) {
+      case 'farmer':
+        return 'agriculture';
+      case 'salon':
+        return 'beauty_services';
+      case 'welding':
+        return 'manufacturing';
+      default:
+        return 'other';
     }
   };
 
@@ -71,24 +91,57 @@ export function EvidenceUpload({ businessType, onEvidenceUploaded, onBack }: Evi
     if (!selectedType || !description || !uploadedFile) return;
 
     setIsUploading(true);
-    
-    // Simulate upload process
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
+    setError(null);
+    setSuccessMessage(null);
+
     const selectedAction = ecoActions.find(action => action.value === selectedType);
-    
-    onEvidenceUploaded({
-      type: selectedType,
-      description,
-      cost,
-      file: uploadedFile,
-      impact: selectedAction?.impact || 'Eco-impact calculated'
-    });
-    
-    setIsUploading(false);
+
+    try {
+      const response = await ai.processEvidence({
+        file: uploadedFile,
+        sector: resolveBackendSector(businessType),
+        region: 'Kenya',
+        evidence_type: selectedType,
+        description,
+      });
+
+      setProcessingMeta({
+        greenscore: response?.greenscore ?? null,
+        confidence: response?.confidence ?? null,
+        requestId: response?.request_id ?? undefined,
+      });
+      setSuccessMessage(
+        response?.status === 'completed'
+          ? 'Evidence processed successfully! Your GreenScore will update shortly.'
+          : 'Evidence submitted. We will notify you once processing completes.'
+      );
+
+      onEvidenceUploaded({
+        type: selectedType,
+        description,
+        cost,
+        file: uploadedFile,
+        impact: selectedAction?.impact || 'Eco-impact calculated',
+        greenscore: response?.greenscore ?? null,
+        confidence: response?.confidence ?? null,
+        requestId: response?.request_id,
+      });
+
+      setSelectedType('');
+      setDescription('');
+      setCost('');
+      setUploadedFile(null);
+    } catch (submissionError) {
+      console.error('Evidence upload failed:', submissionError);
+      const fallbackMessage =
+        submissionError instanceof Error ? submissionError.message : 'Evidence upload failed. Please try again.';
+      setError(fallbackMessage);
+    } finally {
+      setIsUploading(false);
+    }
   };
 
-  const canSubmit = selectedType && description && uploadedFile;
+  const canSubmit = Boolean(selectedType && description && uploadedFile);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-green-50 to-teal-50 p-4 relative overflow-hidden">
@@ -113,6 +166,39 @@ export function EvidenceUpload({ businessType, onEvidenceUploaded, onBack }: Evi
           </div>
           <div className="w-10" />
         </div>
+
+        {(error || successMessage) && (
+          <div
+            className={`p-4 rounded-2xl border-2 backdrop-blur-sm shadow-lg animate-fade-in ${
+              error
+                ? 'border-red-200 bg-red-50/90 text-red-700'
+                : 'border-green-200 bg-green-50/90 text-green-700'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-sm">
+                {error || successMessage}
+              </span>
+              {processingMeta?.requestId && !error && (
+                <Badge className="bg-green-500 text-white border-0" variant="default">
+                  #{processingMeta.requestId.slice(0, 8)}
+                </Badge>
+              )}
+            </div>
+            {processingMeta && !error && (
+              <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                <div className="p-2 bg-white/70 rounded-lg border border-green-100 text-green-700">
+                  <div className="font-semibold">GreenScore</div>
+                  <div>{processingMeta.greenscore != null ? processingMeta.greenscore : 'Pending'}</div>
+                </div>
+                <div className="p-2 bg-white/70 rounded-lg border border-green-100 text-green-700">
+                  <div className="font-semibold">Confidence</div>
+                  <div>{processingMeta.confidence != null ? `${Math.round(processingMeta.confidence * 100)}%` : 'Pending'}</div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Enhanced Instructions */}
         <Card className="relative overflow-hidden bg-gradient-to-br from-green-50/80 to-emerald-50/80 backdrop-blur-sm border-2 border-green-200/50 shadow-xl animate-fade-in">

@@ -2,68 +2,418 @@
 Evidence Processing Service
 Handles OCR, Computer Vision, and evidence validation
 """
+import asyncio
 import io
+import json
 import logging
-from typing import Dict, List, Optional, Any
+import os
+import re
+from base64 import b64encode
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 try:
     import pytesseract
-    from PIL import Image
     import cv2
+    from PIL import Image
 except ImportError:
     pytesseract = None
     Image = None
     cv2 = None
 
 try:
+    from pdf2image import convert_from_bytes
+except ImportError:
+    convert_from_bytes = None
+
+try:
     from google.cloud import vision
     from google.oauth2 import service_account
-    import google.auth
+    from google.api_core.client_options import ClientOptions
 except ImportError:
     vision = None
+
+try:
+    from google.protobuf.json_format import MessageToDict
+except ImportError:  # pragma: no cover
+    MessageToDict = None
 
 import numpy as np
 import requests
 from datetime import datetime
-import re
-import json
-import base64
 
-from .models import EvidenceData, OCRResult, CVResult, ProcessedEvidence
+from .models import (
+    EvidenceData,
+    OCRLine,
+    OCRResult,
+    BoundingBox,
+    CVResult,
+    ProcessedEvidence,
+    EmissionFeatures,
+)
 
 logger = logging.getLogger(__name__)
 
 class EvidenceProcessor:
     """Processes uploaded evidence using OCR and Computer Vision"""
-    
-    def __init__(self, google_vision_api_key: Optional[str] = None):
-        self.google_vision_api_key = google_vision_api_key
+
+    GOOGLE_VISION_ENDPOINT = "https://vision.googleapis.com/v1/images:annotate"
+
+    def __init__(
+        self,
+        google_vision_api_key: Optional[str] = None,
+        google_credentials_path: Optional[str] = None,
+    ):
+        self.google_vision_api_key = (
+            google_vision_api_key
+            or os.getenv("GOOGLE_VISION_API_KEY")
+        )
+        self.google_credentials_path = (
+            google_credentials_path
+            or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+            or os.getenv("GOOGLE_VISION_CREDENTIALS_PATH")
+        )
+        self.google_service_account_json = os.getenv(
+            "GOOGLE_VISION_SERVICE_ACCOUNT_JSON"
+        )
         self.vision_client = None
-        
-        # Initialize Google Vision client if available
-        if vision and google_vision_api_key:
+        self._use_rest_vision = False
+        self._vision_project_id: Optional[str] = None
+
+        # Initialize Google Vision client if library available and credentials provided
+        if vision:
             try:
-                # Create credentials from API key for Vision API
                 self.vision_client = self._create_vision_client()
-            except Exception as e:
-                logger.warning(f"Failed to initialize Google Vision client: {e}")
+            except Exception as exc:
+                logger.warning(
+                    "Failed to initialize google-cloud-vision client; falling back to REST API: %s",
+                    exc,
+                )
                 self.vision_client = None
+
+        if not self.vision_client and self.google_vision_api_key:
+            # Enable REST API fallback using API key
+            self._use_rest_vision = True
         
         # Vendor patterns for OCR validation
         self.vendor_patterns = {
-            'solar': ['solar', 'energy solutions', 'green energy', 'renewable', 'photovoltaic', 'pv'],
-            'water': ['water', 'irrigation', 'pump', 'drip', 'sprinkler'],
-            'waste': ['recycling', 'waste', 'plastic', 'compost', 'bio'],
-            'appliance': ['led', 'efficient', 'inverter', 'energy star', 'eco']
+            "solar": ["solar", "energy solutions", "green energy", "renewable", "photovoltaic", "pv"],
+            "water": ["water", "irrigation", "pump", "drip", "sprinkler"],
+            "waste": ["recycling", "waste", "plastic", "compost", "bio"],
+            "appliance": ["led", "efficient", "inverter", "energy star", "eco"],
         }
-        
+
         # CV labels for equipment detection
         self.equipment_labels = {
-            'solar_panel': ['solar panel', 'photovoltaic', 'solar array'],
-            'water_pump': ['pump', 'water pump', 'irrigation'],
-            'led_light': ['led', 'light bulb', 'lighting'],
-            'inverter': ['inverter', 'power inverter'],
-            'meter': ['meter', 'display', 'digital display']
+            "solar_panel": ["solar panel", "photovoltaic", "solar array"],
+            "water_pump": ["pump", "water pump", "irrigation"],
+            "led_light": ["led", "light bulb", "lighting"],
+            "inverter": ["inverter", "power inverter"],
+            "meter": ["meter", "display", "digital display"],
         }
+
+    # ------------------------------------------------------------------
+    # Google Vision helpers
+    # ------------------------------------------------------------------
+    def _vision_available(self) -> bool:
+        return bool(self.vision_client or self._use_rest_vision)
+
+    def _create_vision_client(self) -> Optional["vision.ImageAnnotatorClient"]:
+        if not vision:
+            return None
+
+        credentials = None
+        if self.google_credentials_path and Path(self.google_credentials_path).exists():
+            credentials = service_account.Credentials.from_service_account_file(
+                self.google_credentials_path
+            )
+        elif self.google_service_account_json:
+            try:
+                credentials = service_account.Credentials.from_service_account_info(
+                    json.loads(self.google_service_account_json)
+                )
+            except json.JSONDecodeError as exc:  # pragma: no cover - config error
+                logger.error("Invalid GOOGLE_VISION_SERVICE_ACCOUNT_JSON: %s", exc)
+
+        if not credentials:
+            return None
+
+        self._vision_project_id = getattr(credentials, "project_id", None)
+        client_options = ClientOptions()
+        return vision.ImageAnnotatorClient(
+            credentials=credentials,
+            client_options=client_options,
+        )
+
+    def _prepare_image_bytes(
+        self,
+        pil_image: Optional[Image.Image],
+        cv_image: Optional[np.ndarray],
+    ) -> bytes:
+        if pil_image is not None:
+            buffer = io.BytesIO()
+            pil_image.save(buffer, format="PNG")
+            return buffer.getvalue()
+
+        if cv_image is not None:
+            if Image is not None and cv2 is not None:
+                pil = Image.fromarray(cv2.cvtColor(cv_image, cv2.COLOR_BGR2RGB))
+                buffer = io.BytesIO()
+                pil.save(buffer, format="PNG")
+                return buffer.getvalue()
+            if cv2 is not None:
+                success, encoded = cv2.imencode(".png", cv_image)
+                if success:
+                    return encoded.tobytes()
+            raise ValueError("Unable to encode image for Vision request")
+
+        raise ValueError("No image data supplied for Vision request")
+
+    async def _google_vision_ocr(
+        self,
+        pil_image: Optional[Image.Image],
+        cv_image: Optional[np.ndarray],
+    ) -> Optional[OCRResult]:
+        if not self._vision_available():
+            return None
+
+        try:
+            image_bytes = self._prepare_image_bytes(pil_image, cv_image)
+        except Exception as exc:
+            logger.error("Vision OCR preparation failed: %s", exc)
+            return None
+
+        try:
+            if self.vision_client:
+                response = await self._call_vision_ocr_grpc(image_bytes)
+            elif self._use_rest_vision:
+                response = await self._call_vision_ocr_rest(image_bytes)
+            else:
+                return None
+        except Exception as exc:
+            logger.error("Google Vision OCR error: %s", exc)
+            return None
+
+        if not response:
+            return None
+
+        return self._parse_vision_ocr_response(response)
+
+    async def _call_vision_ocr_grpc(self, image_bytes: bytes) -> Optional[Dict[str, Any]]:
+        if not self.vision_client:
+            return None
+
+        image = vision.Image(content=image_bytes)
+        response = await self._vision_request_async(
+            self.vision_client.document_text_detection,
+            image=image,
+        )
+        if response.error.message:
+            raise RuntimeError(response.error.message)
+
+        if MessageToDict is not None:
+            return MessageToDict(response._pb, preserving_proto_field_name=True)
+        return json.loads(vision.AnnotateImageResponse.to_json(response))
+
+    async def _call_vision_ocr_rest(self, image_bytes: bytes) -> Optional[Dict[str, Any]]:
+        if not self.google_vision_api_key:
+            return None
+
+        payload = {
+            "requests": [
+                {
+                    "image": {"content": b64encode(image_bytes).decode("utf-8")},
+                    "features": [{"type": "DOCUMENT_TEXT_DETECTION"}],
+                }
+            ]
+        }
+
+        response = requests.post(
+            f"{self.GOOGLE_VISION_ENDPOINT}?key={self.google_vision_api_key}",
+            json=payload,
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+        responses = data.get("responses")
+        if not responses:
+            return None
+        return responses[0]
+
+    async def _google_vision_cv(self, cv_image: np.ndarray) -> Optional[CVResult]:
+        if not self._vision_available():
+            return None
+
+        try:
+            image_bytes = self._prepare_image_bytes(None, cv_image)
+        except Exception as exc:
+            logger.error("Vision CV preparation failed: %s", exc)
+            return None
+
+        try:
+            if self.vision_client:
+                response = await self._call_vision_cv_grpc(image_bytes)
+            elif self._use_rest_vision:
+                response = await self._call_vision_cv_rest(image_bytes)
+            else:
+                return None
+        except Exception as exc:
+            logger.error("Google Vision CV error: %s", exc)
+            return None
+
+        if not response:
+            return None
+
+        return self._parse_vision_cv_response(response)
+
+    async def _call_vision_cv_grpc(self, image_bytes: bytes) -> Optional[Dict[str, Any]]:
+        if not self.vision_client:
+            return None
+
+        image = vision.Image(content=image_bytes)
+        response = await self._vision_request_async(
+            self.vision_client.annotate_image,
+            request={
+                "image": image,
+                "features": [
+                    {"type": vision.Feature.Type.LABEL_DETECTION, "max_results": 20},
+                    {"type": vision.Feature.Type.OBJECT_LOCALIZATION, "max_results": 10},
+                ],
+            },
+        )
+        if response.error.message:
+            raise RuntimeError(response.error.message)
+
+        if MessageToDict is not None:
+            return MessageToDict(response._pb, preserving_proto_field_name=True)
+        return json.loads(vision.AnnotateImageResponse.to_json(response))
+
+    async def _call_vision_cv_rest(self, image_bytes: bytes) -> Optional[Dict[str, Any]]:
+        if not self.google_vision_api_key:
+            return None
+
+        payload = {
+            "requests": [
+                {
+                    "image": {"content": b64encode(image_bytes).decode("utf-8")},
+                    "features": [
+                        {"type": "LABEL_DETECTION", "maxResults": 20},
+                        {"type": "OBJECT_LOCALIZATION", "maxResults": 10},
+                    ],
+                }
+            ]
+        }
+
+        response = requests.post(
+            f"{self.GOOGLE_VISION_ENDPOINT}?key={self.google_vision_api_key}",
+            json=payload,
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+        responses = data.get("responses")
+        if not responses:
+            return None
+        return responses[0]
+
+    async def _vision_request_async(self, func, *args, **kwargs):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+
+    def _parse_vision_ocr_response(self, response: Dict[str, Any]) -> OCRResult:
+        if response.get("error"):
+            raise RuntimeError(response["error"].get("message", "Vision OCR error"))
+
+        text_annotation = response.get("fullTextAnnotation")
+        if not text_annotation:
+            return OCRResult(
+                confidence=0.0,
+                provenance={"engine": "google_vision", "source": "no_text"},
+            )
+
+        raw_text = text_annotation.get("text", "")
+        pages = text_annotation.get("pages", [])
+        page_confidence = pages[0].get("confidence", 0.7) if pages else 0.7
+        confidence = max(0.1, min(1.0, float(page_confidence)))
+
+        lines: List[OCRLine] = []
+        for page in pages:
+            for block in page.get("blocks", []):
+                for paragraph in block.get("paragraphs", []):
+                    words = paragraph.get("words", [])
+                    paragraph_text = " ".join(
+                        "".join(symbol.get("text", "") for symbol in word.get("symbols", []))
+                        for word in words
+                    )
+                    if paragraph_text.strip():
+                        bounding = paragraph.get("boundingBox", {})
+                        vertices = bounding.get("normalizedVertices") or bounding.get("vertices", [])
+                        bounding_box = None
+                        if vertices:
+                            bounding_box = BoundingBox(
+                                left=vertices[0].get("x", 0.0),
+                                top=vertices[0].get("y", 0.0),
+                                width=vertices[2].get("x", 0.0) - vertices[0].get("x", 0.0),
+                                height=vertices[2].get("y", 0.0) - vertices[0].get("y", 0.0),
+                            )
+                        lines.append(
+                            OCRLine(
+                                text=paragraph_text,
+                                confidence=float(paragraph.get("confidence", confidence)),
+                                bounding_box=bounding_box,
+                            )
+                        )
+
+        vendor = self._extract_vendor(raw_text)
+        amount = self._extract_amount(raw_text)
+        date = self._extract_date(raw_text)
+        items = self._extract_items(raw_text)
+        score_confidence = max(confidence, self._calculate_ocr_confidence(raw_text))
+
+        return OCRResult(
+            vendor=vendor,
+            amount_ksh=amount,
+            date=date,
+            items=items,
+            confidence=score_confidence,
+            raw_text=raw_text.strip(),
+            lines=lines,
+            provenance={
+                "engine": "google_vision",
+                "project": self._vision_project_id,
+                "source": "document_text_detection",
+            },
+        )
+
+    def _parse_vision_cv_response(self, response: Dict[str, Any]) -> CVResult:
+        if response.get("error"):
+            raise RuntimeError(response["error"].get("message", "Vision CV error"))
+
+        label_annotations = response.get("labelAnnotations", [])
+        localized_objects = response.get("localizedObjectAnnotations", [])
+
+        labels = [label.get("description", "") for label in label_annotations]
+        label_confidences = [float(label.get("score", 0.0)) for label in label_annotations]
+
+        detected_objects: List[Dict[str, Any]] = []
+        for obj in localized_objects:
+            bounding_poly = obj.get("boundingPoly", {}).get("normalizedVertices") or obj.get("boundingPoly", {}).get("vertices", [])
+            detected_objects.append(
+                {
+                    "name": obj.get("name"),
+                    "score": float(obj.get("score", 0.0)),
+                    "bounding_box": bounding_poly,
+                }
+            )
+
+        caption = "Image shows {}".format(", ".join(labels[:3])) if labels else "Image content analyzed"
+        confidence = max(label_confidences) if label_confidences else 0.0
+
+        return CVResult(
+            labels=labels,
+            caption=caption,
+            confidence=confidence,
+            detected_objects=detected_objects,
+        )
 
     async def process_evidence(self, evidence: EvidenceData) -> ProcessedEvidence:
         """Main processing pipeline for evidence"""
@@ -77,6 +427,9 @@ class EvidenceProcessor:
             # Run Computer Vision
             cv_result = await self._analyze_image(image)
             
+            # Estimate emission features when possible
+            features = self._estimate_emission_features(ocr_result, cv_result)
+            
             # Calculate processing confidence
             confidence = self._calculate_confidence(ocr_result, cv_result, evidence)
             
@@ -86,6 +439,7 @@ class EvidenceProcessor:
                 type=evidence.type,
                 ocr=ocr_result,
                 cv=cv_result,
+                features=features,
                 geo=evidence.geo,
                 timestamp=evidence.timestamp,
                 processing_confidence=confidence
@@ -100,6 +454,7 @@ class EvidenceProcessor:
                 type=evidence.type,
                 ocr=OCRResult(),
                 cv=CVResult(),
+                features=None,
                 geo=evidence.geo,
                 timestamp=evidence.timestamp,
                 processing_confidence=0.1
@@ -114,10 +469,19 @@ class EvidenceProcessor:
                 
             response = requests.get(file_url, timeout=30)
             response.raise_for_status()
-            
+
+            content_type = response.headers.get("Content-Type", "").lower()
+            file_extension = Path(file_url).suffix.lower()
+
+            if ("pdf" in content_type or file_extension == ".pdf") and convert_from_bytes and Image:
+                images = convert_from_bytes(response.content)
+                if images:
+                    pil_image = images[0]
+                    return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+
             # Convert to PIL Image
             pil_image = Image.open(io.BytesIO(response.content))
-            
+
             # Convert to OpenCV format
             cv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
             return cv_image
@@ -130,6 +494,17 @@ class EvidenceProcessor:
     async def _extract_text(self, image: np.ndarray) -> OCRResult:
         """Extract text using OCR (pytesseract + Google Vision fallback)"""
         try:
+            pil_image = None
+            if Image and cv2:
+                # Convert OpenCV image to PIL for both pytesseract and Vision API
+                pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+
+            # Prefer Google Vision when configured
+            if self._vision_available():
+                vision_result = await self._google_vision_ocr(pil_image, image)
+                if vision_result:
+                    return vision_result
+
             if not pytesseract or not Image or not cv2:
                 # Return mock OCR result if dependencies not available
                 return OCRResult(
@@ -138,65 +513,62 @@ class EvidenceProcessor:
                     date="2024-01-15",
                     items=["Solar Panel 300W", "Installation Kit"],
                     confidence=0.85,
-                    raw_text="Solar Panel Installation Receipt - Amount: KES 45,000 - Green Energy Solutions Ltd"
+                    raw_text="Solar Panel Installation Receipt - Amount: KES 45,000 - Green Energy Solutions Ltd",
+                    provenance={"engine": "mock"},
                 )
-            
-            # Convert OpenCV image to PIL
-            pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-            
-            # Primary OCR with pytesseract
-            raw_text = pytesseract.image_to_string(pil_image, config='--psm 6')
+
+            # Fallback to pytesseract when Vision unavailable
+            pil_image = pil_image or Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+            raw_text = pytesseract.image_to_string(pil_image, config="--psm 6")
             confidence = self._calculate_ocr_confidence(raw_text)
-            
-            # Parse structured data from text
             vendor = self._extract_vendor(raw_text)
             amount = self._extract_amount(raw_text)
             date = self._extract_date(raw_text)
             items = self._extract_items(raw_text)
-            
-            # If confidence is low and Google Vision is available, try fallback
-            if confidence < 0.5 and self.google_vision_api_key:
-                google_result = await self._google_vision_ocr(pil_image)
-                if google_result and google_result.confidence > confidence:
-                    return google_result
-            
+
             return OCRResult(
                 vendor=vendor,
                 amount_ksh=amount,
                 date=date,
                 items=items,
                 confidence=confidence,
-                raw_text=raw_text.strip()
+                raw_text=raw_text.strip(),
+                provenance={"engine": "pytesseract"},
             )
-            
+
         except Exception as e:
             logger.error(f"OCR extraction error: {str(e)}")
-            return OCRResult(confidence=0.0)
+            return OCRResult(confidence=0.0, provenance={"engine": "error", "detail": str(e)})
 
     async def _analyze_image(self, image: np.ndarray) -> CVResult:
         """Analyze image using computer vision"""
         try:
+            if self._vision_available():
+                vision_cv = await self._google_vision_cv(image)
+                if vision_cv:
+                    return vision_cv
+
             if not cv2:
                 # Return mock CV result if dependencies not available
                 return CVResult(
                     labels=["solar_panel", "meter"],
                     caption="Image shows solar panels and meter display",
                     confidence=0.8,
-                    detected_objects=[]
+                    detected_objects=[],
                 )
-            
+
             # Simple object detection using template matching and color analysis
             labels = self._detect_objects(image)
             caption = self._generate_caption(image, labels)
             confidence = len(labels) * 0.2  # Simple confidence based on detections
-            
+
             return CVResult(
                 labels=labels,
                 caption=caption,
                 confidence=min(confidence, 1.0),
-                detected_objects=[]
+                detected_objects=[],
             )
-            
+
         except Exception as e:
             logger.error(f"CV analysis error: {str(e)}")
             return CVResult(confidence=0.0)
@@ -251,6 +623,59 @@ class EvidenceProcessor:
             return f"Image shows {', '.join(caption_parts)}"
         else:
             return f"Image contains {', '.join(labels)}"
+
+    def _estimate_emission_features(
+        self,
+        ocr: Optional[OCRResult],
+        cv: Optional[CVResult],
+    ) -> Optional[EmissionFeatures]:
+        """Heuristic feature estimation from OCR/CV findings."""
+        if not ocr and not cv:
+            return None
+
+        features = EmissionFeatures()
+        hints: List[str] = []
+
+        if ocr:
+            if ocr.items:
+                hints.extend(text.lower() for text in ocr.items)
+            if ocr.vendor:
+                hints.append(ocr.vendor.lower())
+            if ocr.raw_text:
+                hints.append(ocr.raw_text.lower())
+
+        if cv and cv.labels:
+            hints.extend(label.lower() for label in cv.labels)
+
+        amount = (ocr.amount_ksh if ocr else None) or 0.0
+
+        def has_hint(*keywords: str) -> bool:
+            return any(keyword in hint for hint in hints for keyword in keywords)
+
+        if has_hint("solar"):
+            base_generation = max(amount / 50000.0 * 120.0, 40.0) if amount else 60.0
+            features.solar_kwh_generated = round(base_generation, 2)
+
+        if has_hint("led", "lighting", "bulb"):
+            bulbs = amount / 400.0 if amount else 5.0
+            bulbs = max(bulbs, 1.0)
+            features.kwh_saved = round(bulbs * 0.01 * 8 * 30, 2)
+
+        if has_hint("pump", "irrigation", "water"):
+            savings = (amount / 15000.0) * 500.0 if amount else 300.0
+            features.water_m3_saved = round(max(savings, 100.0), 2)
+
+        if has_hint("plastic", "waste", "recycle"):
+            recycled = amount / 200.0 if amount else 50.0
+            features.plastic_kg_recycled = round(max(recycled, 10.0), 2)
+
+        if has_hint("inverter"):
+            efficiency = (amount / 100000.0) * 2 * 8 * 25 if amount else 200.0
+            features.appliance_efficiency_gain = round(max(efficiency, 80.0), 2)
+
+        if any(value is not None for value in features.dict().values()):
+            return features
+        return None
 
     def _extract_vendor(self, text: str) -> Optional[str]:
         """Extract vendor name from OCR text"""

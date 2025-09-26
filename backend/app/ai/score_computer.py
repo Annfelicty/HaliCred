@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 import math
 
-from .models import GreenScoreResult, EmissionResult
+from .models import GreenScoreResult, EmissionResult, EmissionFeatures
 from .sector_baseline import SectorBaselineService
 
 logger = logging.getLogger(__name__)
@@ -321,12 +321,24 @@ class ScoreComputer:
         emission_result: EmissionResult,
         sector: str,
         ocr_data: Dict[str, Any],
-        cv_data: Dict[str, Any]
+        cv_data: Dict[str, Any],
+        features: Optional[EmissionFeatures] = None,
     ) -> Dict[str, float]:
         """Estimate user metrics from evidence data"""
         metrics = {}
         
         try:
+            # Use explicit features when provided
+            if features:
+                if features.solar_kwh_generated:
+                    metrics["renewable_pct"] = min(1.0, (features.solar_kwh_generated / 500.0))
+                if features.kwh_saved:
+                    metrics["kwh_saved_ann"] = (features.kwh_saved or 0) * 12
+                if features.water_m3_saved:
+                    metrics["water_m3_saved_ann"] = (features.water_m3_saved or 0) * 12
+                if features.plastic_kg_recycled:
+                    metrics["waste_kg_recycled_ann"] = (features.plastic_kg_recycled or 0) * 12
+
             # Estimate renewable percentage based on evidence
             if "solar" in str(cv_data.get("labels", [])).lower():
                 if sector == "salon":

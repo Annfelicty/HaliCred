@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import { loans, profile, LoanRecord } from '../lib/api';
+import { loans, profile, ai } from '../lib/api';
+import type { LoanRecord } from '../lib/api';
 import { SMEOnboarding } from './Sme/SMEOnboarding';
 import { SMEDashboard } from './Sme/SMEDashboard';
 import { EvidenceUpload } from './Sme/EvidenceUpload';
@@ -118,6 +119,31 @@ export function SMEApp({ onBack }: SMEAppProps) {
   const [user, setUser] = useState<SMEUser | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
 
+  const fetchGreenScore = useCallback(async () => {
+    try {
+      const response = await ai.getCurrentGreenScore();
+
+      if (response && typeof response.greenscore === 'number') {
+        setUser((previous) => {
+          if (!previous) {
+            return previous;
+          }
+          const nextUser: SMEUser = {
+            ...previous,
+            greenScore: response.greenscore,
+          };
+          persistUser(nextUser);
+          return nextUser;
+        });
+      }
+
+      return response;
+    } catch (error) {
+      console.error('Failed to fetch GreenScore:', error);
+      return null;
+    }
+  }, []);
+
   const loadUserData = useCallback(async () => {
     setLoadingUser(true);
 
@@ -136,9 +162,13 @@ export function SMEApp({ onBack }: SMEAppProps) {
     }
 
     try {
-      const [profileResponse, loanResponse] = await Promise.all([
+      const [profileResponse, loanResponse, greenscoreResponse] = await Promise.all([
         profile.getProfile(),
         loans.getUserLoans(),
+        ai.getCurrentGreenScore().catch((error) => {
+          console.error('Failed to fetch GreenScore during load:', error);
+          return null;
+        }),
       ]);
 
       const mappedLoans = Array.isArray(loanResponse)
@@ -153,7 +183,10 @@ export function SMEApp({ onBack }: SMEAppProps) {
         businessType: cached?.businessType ?? 'other',
         businessName: cached?.businessName ?? '',
         location: cached?.location ?? '',
-        greenScore: cached?.greenScore ?? 45,
+        greenScore:
+          (greenscoreResponse && typeof greenscoreResponse?.greenscore === 'number'
+            ? greenscoreResponse.greenscore
+            : undefined) ?? cached?.greenScore ?? 45,
         ecoActions: cached?.ecoActions ?? [],
         loanApplications: mappedLoans,
       };
@@ -238,28 +271,38 @@ export function SMEApp({ onBack }: SMEAppProps) {
     setCurrentStep('dashboard');
   };
 
-  const handleEvidenceUploaded = (evidence: any) => {
-    if (user) {
+  const handleEvidenceUploaded = async (evidence: any) => {
+    setUser((previous) => {
+      if (!previous) {
+        return previous;
+      }
+
+      const verified = typeof evidence?.confidence === 'number' ? evidence.confidence >= 0.7 : false;
       const newAction = {
         id: Date.now().toString(),
         type: evidence.type,
         description: evidence.description,
         date: new Date().toLocaleDateString(),
-        verified: false,
+        verified,
         impact: evidence.impact,
       };
 
-      const updatedUser: SMEUser = {
-        ...user,
-        ecoActions: [...user.ecoActions, newAction],
-        greenScore: Math.min(100, user.greenScore + Math.floor(Math.random() * 15) + 5),
+      const nextUser: SMEUser = {
+        ...previous,
+        ecoActions: [...previous.ecoActions, newAction],
+        greenScore:
+          typeof evidence?.greenscore === 'number'
+            ? evidence.greenscore
+            : previous.greenScore,
       };
 
-      setUser(updatedUser);
-      persistUser(updatedUser);
+      persistUser(nextUser);
+      return nextUser;
+    });
 
-      setCurrentStep('dashboard');
-    }
+    setCurrentStep('dashboard');
+
+    await fetchGreenScore();
   };
 
   const handleApplyForLoan = async (payload: { amount: number; term: number; purpose: string; estimatedRate: number }) => {

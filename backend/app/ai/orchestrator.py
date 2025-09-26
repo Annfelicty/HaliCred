@@ -13,8 +13,9 @@ except ImportError:
     genai = None
 
 from .models import (
-    EvidenceData, OCRResult, CVResult, EmissionResult, 
-    GreenScoreResult, CarbonCredit, AIOrchestrationRequest, AIOrchestrationResult
+    EvidenceData, OCRResult, CVResult, EmissionResult,
+    GreenScoreResult, CarbonCredit, AIOrchestrationRequest, AIOrchestrationResult,
+    EmissionFeatures,
 )
 from .evidence_processor import EvidenceProcessor
 from .emission_calculator import EmissionCalculator
@@ -233,23 +234,27 @@ class AIOrchestrator:
             # Step 1: Process evidence (already processed)
             ocr_result = request.evidence.ocr
             cv_result = request.evidence.cv
-            
+            features = getattr(request.evidence, "features", None)
+
             # Step 2: Calculate emissions
             emission_result = await self.emission_calculator.calculate_emissions(
+                evidence_id=request.evidence.evidence_id,
+                sector=request.sector,
+                region=request.region,
                 ocr_result=ocr_result,
                 cv_result=cv_result,
-                sector=request.sector,
-                region=request.region
+                features=features,
             )
-            
+
             # Step 3: Estimate user metrics
             user_metrics = self.score_computer.estimate_user_metrics_from_evidence(
                 emission_result=emission_result,
                 sector=request.sector,
-                ocr_data=ocr_result.dict() if ocr_result else {},
-                cv_data=cv_result.dict() if cv_result else {}
+                ocr_data=ocr_result.model_dump() if ocr_result else {},
+                cv_data=cv_result.model_dump() if cv_result else {},
+                features=features,
             )
-            
+
             # Step 4: Compute GreenScore
             greenscore_result = await self.score_computer.compute_score(
                 user_id=request.evidence.user_id,
@@ -257,20 +262,20 @@ class AIOrchestrator:
                 sector=request.sector,
                 emission_result=emission_result,
                 user_metrics=user_metrics,
-                region=request.region
+                region=request.region,
             )
-            
+
             # Step 5: Calculate carbon credits
             carbon_credits = await self.carbon_credit_aggregator.calculate_carbon_credits(
                 user_id=request.evidence.user_id,
                 evidence_id=request.evidence.evidence_id,
                 emission_result=emission_result,
                 greenscore_result=greenscore_result,
-                sector=request.sector
+                sector=request.sector,
             )
-            
+
             processing_time = (datetime.now() - start_time).total_seconds() * 1000
-            
+
             return AIOrchestrationResult(
                 evidence_id=request.evidence.evidence_id,
                 user_id=request.evidence.user_id,
@@ -280,13 +285,14 @@ class AIOrchestrator:
                 confidence=greenscore_result.confidence,
                 explainers=greenscore_result.explainers,
                 actions=greenscore_result.actions,
-                carbon_credits=carbon_credits[0] if carbon_credits else None
+                carbon_credits=carbon_credits[0] if carbon_credits else None,
+                provenance={"processing_time_ms": processing_time},
             )
-            
-        except Exception as e:
-            logger.error(f"Error in deterministic processing: {str(e)}")
+
+        except Exception as exc:
+            logger.error("Error in deterministic processing: %s", exc)
             processing_time = (datetime.now() - start_time).total_seconds() * 1000
-            
+
             return AIOrchestrationResult(
                 evidence_id=request.evidence.evidence_id,
                 user_id=request.evidence.user_id,
@@ -294,53 +300,45 @@ class AIOrchestrator:
                 subscores={},
                 co2_saved_tonnes=0.0,
                 confidence=0.0,
-                explainers=[f"Error: {str(e)}"],
-                actions=[]
+                explainers=[f"Error: {exc}"],
+                actions=[],
+                provenance={"processing_time_ms": processing_time},
             )
 
-    def _build_context(self, request: AIOrchestrationRequest) -> str:
-        """Build context string for LLM"""
-        context = f"""
-        Evidence Processing Request:
-        - User ID: {request.evidence.user_id}
-        - Evidence ID: {request.evidence.evidence_id}
-        - Evidence Type: {request.evidence.type}
-        - Sector: {request.sector}
-        - Region: {request.region}
-        - Timestamp: {request.evidence.timestamp}
-        
-        Please process this evidence to calculate GreenScore and carbon credits.
-        """
-        return context
-
-    # Function implementations for LLM calls
-    async def _process_evidence(self, evidence: Dict[str, Any]) -> Dict[str, Any]:
-        """Process evidence wrapper for LLM"""
-        evidence_obj = EvidenceData(**evidence)
-        result = await self.evidence_processor.process_evidence(evidence_obj)
-        return {
-            "ocr_result": result["ocr_result"].dict() if result["ocr_result"] else None,
-            "cv_result": result["cv_result"].dict() if result["cv_result"] else None
-        }
-
     async def _calculate_emissions(
-        self, 
-        ocr_result: Dict[str, Any], 
-        cv_result: Dict[str, Any], 
-        sector: str, 
-        region: str = "Kenya"
+        self,
+        evidence_id: str,
+        ocr_result: Dict[str, Any],
+        cv_result: Dict[str, Any],
+        sector: str,
+        region: str = "Kenya",
+        features: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Calculate emissions wrapper for LLM"""
         ocr_obj = OCRResult(**ocr_result) if ocr_result else None
         cv_obj = CVResult(**cv_result) if cv_result else None
         
+        features_obj = EmissionFeatures(**features) if features else None
+
         result = await self.emission_calculator.calculate_emissions(
+            evidence_id=evidence_id,
+            sector=sector,
+            region=region,
             ocr_result=ocr_obj,
             cv_result=cv_obj,
-            sector=sector,
-            region=region
+            features=features_obj,
         )
-        return result.dict()
+        return result.model_dump()
+
+    async def _process_evidence(self, evidence: Dict[str, Any]) -> Dict[str, Any]:
+        """Process evidence wrapper for LLM compatibility."""
+        evidence_obj = EvidenceData(**evidence)
+        processed = await self.evidence_processor.process_evidence(evidence_obj)
+        return {
+            "ocr_result": processed.ocr.model_dump() if processed.ocr else None,
+            "cv_result": processed.cv.model_dump() if processed.cv else None,
+            "features": processed.features.model_dump() if processed.features else None,
+        }
 
     async def _compute_greenscore(
         self,
