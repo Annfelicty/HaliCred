@@ -5,13 +5,16 @@ import { Label } from '../Ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../Ui/card';
 // import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../Ui/select';
 import { Checkbox } from '../Ui/checkbox';
+import type { LucideIcon } from 'lucide-react';
 import { ArrowLeft, Leaf, Tractor, Scissors, Zap, Building, Sparkles, CheckCircle, Shield, Smartphone } from 'lucide-react';
+
+type BusinessType = 'farmer' | 'salon' | 'welding' | 'other';
 
 interface SMEOnboardingProps {
   onComplete: (userData: {
     name: string;
     phone: string;
-    businessType: 'farmer' | 'salon' | 'welding' | 'other';
+    businessType: BusinessType;
     businessName: string;
     location: string;
   }) => void;
@@ -23,7 +26,7 @@ export function SMEOnboarding({ onComplete, onBack }: SMEOnboardingProps) {
   const [formData, setFormData] = useState({
     name: '',
     phone: '',
-    businessType: '' as 'farmer' | 'salon' | 'welding' | 'other',
+    businessType: null as BusinessType | null,
     businessName: '',
     location: '',
     consents: {
@@ -33,7 +36,7 @@ export function SMEOnboarding({ onComplete, onBack }: SMEOnboardingProps) {
     }
   });
 
-  const businessTypes = [
+  const businessTypes: Array<{ value: BusinessType; label: string; icon: LucideIcon; description: string }> = [
     { value: 'farmer', label: 'Agriculture/Farming', icon: Tractor, description: 'Crops, livestock, agro-processing' },
     { value: 'salon', label: 'Beauty Salon/Spa', icon: Scissors, description: 'Hair, beauty, wellness services' },
     { value: 'welding', label: 'Welding/Metal Work', icon: Zap, description: 'Fabrication, repair, metalworking' },
@@ -44,6 +47,9 @@ export function SMEOnboarding({ onComplete, onBack }: SMEOnboardingProps) {
     if (step < 3) {
       setStep(step + 1);
     } else {
+      if (!formData.businessType) {
+        return;
+      }
       onComplete({
         name: formData.name,
         phone: formData.phone,
@@ -59,7 +65,7 @@ export function SMEOnboarding({ onComplete, onBack }: SMEOnboardingProps) {
       case 1:
         return formData.name && formData.phone;
       case 2:
-        return formData.businessType;
+        return Boolean(formData.businessType);
       case 3:
         return formData.businessName && formData.location && Object.values(formData.consents).every(v => v);
       default:
@@ -211,7 +217,7 @@ export function SMEOnboarding({ onComplete, onBack }: SMEOnboardingProps) {
                           ? 'border-green-500 bg-gradient-to-br from-green-50/80 to-emerald-50/80 shadow-xl'
                           : 'border-gray-200 bg-white/60 hover:border-green-300 hover:bg-white/80'
                       }`}
-                      onClick={() => setFormData({ ...formData, businessType: type.value as any })}
+                      onClick={() => setFormData({ ...formData, businessType: type.value })}
                       style={{ animationDelay: `${index * 0.1}s` }}
                     >
                       {/* Selected Indicator */}

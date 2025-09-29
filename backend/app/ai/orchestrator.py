@@ -36,7 +36,7 @@ class AIOrchestrator:
         # Initialize Gemini AI if available
         if genai:
             genai.configure(api_key=config.get('gemini_api_key', ''))
-            self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+            self.model = genai.GenerativeModel('gemini-2.5-flash')
         else:
             self.model = None
         

@@ -29,25 +29,24 @@ Each router includes endpoints for specific functionalities:
 """
 
 # app/main.py
-import os
-import time
-import random
-import hashlib
-import hmac
-from uuid import uuid4
+import os, time, random, hashlib, hmac
+from pathlib import Path
+from uuid import uuid4, UUID
 
 from fastapi import FastAPI, Depends, HTTPException, APIRouter, status
 from fastapi.middleware.cors import CORSMiddleware
+import os
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+from jose import jwt, JWTError
 
 from typing import List
 
-from app import schemas, utilis
+from app import models, schemas, utilis
 from app.db import get_db
 from app.models import User, BusinessProfile
 from app.jwks import router as jwks_router
 from app.config import settings
-from app.auth import get_current_user
 
 # Import API modules
 from app.api import auth, evidence, ai_engine
@@ -71,12 +70,71 @@ app.add_middleware(
 )
 
 app.include_router(jwks_router)
+security = HTTPBearer(auto_error=False)
+
+# Ensure JWT RS256 authentication setup
+try:
+    private_key = Path(settings.JWT_PRIVATE_KEY_PATH).read_text()
+    public_key = Path(settings.JWT_PUBLIC_KEY_PATH).read_text()
+except FileNotFoundError:
+    # Fallback for development - generate simple keys
+    private_key = "dev-secret-key"
+    public_key = "dev-secret-key"
+    
+ALGORITHM = settings.JWT_ALGORITHM
 HMAC_SECRET = settings.AUDIT_HMAC_SECRET.encode()
 
 # Health check endpoint
 @app.get("/health")
 def health_check():
     return {"status": "healthy", "service": "haliscore-backend"}
+
+# Dependencies
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+):
+    if credentials is None or not credentials.credentials:
+        raise HTTPException(status_code=401, detail="Authentication credentials were not provided")
+
+    token = credentials.credentials
+    algorithm = settings.JWT_ALGORITHM.upper()
+    try:
+        if algorithm.startswith("HS"):
+            claims = jwt.decode(
+                token,
+                settings.SECRET_KEY,
+                algorithms=[settings.JWT_ALGORITHM],
+                options={"verify_aud": False},
+            )
+        else:
+            key_path = Path(settings.JWT_PUBLIC_KEY_PATH)
+            if key_path.exists():
+                public_key = key_path.read_text()
+            else:
+                # Workaround for missing key in development/test environments
+                public_key = settings.SECRET_KEY
+            claims = jwt.decode(
+                token,
+                public_key,
+                algorithms=[settings.JWT_ALGORITHM],
+                options={"verify_aud": False},
+            )
+        user_id = claims.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token: missing subject")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    try:
+        user_uuid = UUID(user_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=401, detail="Invalid token subject")
+
+    user = db.query(User).filter(User.id == user_uuid).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
 
 # Create routers for different functionalities
 profile_router = APIRouter()
@@ -261,16 +319,6 @@ def decide_application(id: str, payload: schemas.DecisionSchema, user=Depends(ut
     log = {"entity": "loan", "entity_id": id, "action": payload.decision}
     loan["audit_hmac"] = hmac.new(HMAC_SECRET, str(log).encode(), hashlib.sha256).hexdigest()
     return loan
-
-
-@admin_router.get("/admin/loan-applications")
-def list_applications_alias(status: str = "submitted", user=Depends(utilis.require_role("underwriter"))):
-    return list_applications(status=status, user=user)
-
-
-@admin_router.post("/admin/loans/{id}/review")
-def review_application_alias(id: str, payload: schemas.DecisionSchema, user=Depends(utilis.require_role("underwriter"))):
-    return decide_application(id=id, payload=payload, user=user)
 
 # Include all routers
 app.include_router(auth.router)

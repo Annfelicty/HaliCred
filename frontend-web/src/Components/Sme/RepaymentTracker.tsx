@@ -178,7 +178,107 @@ export function RepaymentTracker({ user, onBack }: RepaymentTrackerProps) {
   const statusKey = loanInFocus?.backendStatus?.toLowerCase() || loanInFocus?.status?.toLowerCase() || 'unknown';
   const statusInfo = resolveLoanStatus(statusKey);
   const tone = toneClasses[statusInfo.tone];
-  const StatusIcon = statusInfo.tone === 'pending' ? Clock : statusInfo.tone === 'neutral' ? DollarSign : CheckCircle;
+const StatusIcon = statusInfo.tone === 'pending' ? Clock : statusInfo.tone === 'neutral' ? DollarSign : CheckCircle;
+
+  const computedLoanMetrics = useMemo(() => {
+    if (!loanInFocus) {
+      return {
+        originatedAt: null,
+        quotedRate: null as number | null,
+        monthlyPayment: 0,
+        totalInstallments: 0,
+        normalizedMonthsElapsed: 0,
+        totalDue: 0,
+        amountRepaid: 0,
+        remainingBalance: 0,
+        repaymentProgress: 0,
+        progressPercent: 0,
+        installmentsRemaining: 0,
+        nextPaymentDate: null as Date | null,
+        schedulePreview: { completed: [] as Date[], upcoming: [] as Date[] },
+      };
+    }
+
+    const originatedAt = loanInFocus.createdAt ? new Date(loanInFocus.createdAt * 1000) : null;
+    const quotedRate = toDisplayRate(loanInFocus.quotedRate ?? loanInFocus.interestRate ?? null);
+    const totalInstallments = loanInFocus.term || loanInFocus.tenor || 0;
+    const monthlyPayment = calculateMonthlyPayment(
+      loanInFocus.amount,
+      quotedRate ?? 0,
+      totalInstallments
+    );
+
+    const now = new Date();
+    const rawMonthsElapsed = originatedAt ? monthsBetween(originatedAt, now) : 0;
+    const normalizedMonthsElapsed = statusInfo.tone === 'completed'
+      ? totalInstallments
+      : Math.min(totalInstallments, rawMonthsElapsed);
+
+    const totalDue = monthlyPayment * totalInstallments;
+    const amountRepaid = statusInfo.tone === 'completed'
+      ? totalDue
+      : Math.min(totalDue, monthlyPayment * normalizedMonthsElapsed);
+    const remainingBalance = Math.max(totalDue - amountRepaid, 0);
+    const progressPercent = Math.round(totalDue > 0 ? Math.min(1, amountRepaid / totalDue) * 100 : 0);
+    const installmentsRemaining = Math.max(totalInstallments - normalizedMonthsElapsed, 0);
+
+    const nextPaymentDate = (() => {
+      if (!originatedAt) {
+        return null;
+      }
+      if (statusInfo.tone === 'completed' || installmentsRemaining <= 0) {
+        return null;
+      }
+      return addMonths(originatedAt, normalizedMonthsElapsed + 1);
+    })();
+
+    const schedulePreview = (() => {
+      if (!originatedAt || totalInstallments <= 0) {
+        return { completed: [] as Date[], upcoming: [] as Date[] };
+      }
+      const completedCount = Math.min(normalizedMonthsElapsed, totalInstallments);
+      const upcomingCount = Math.max(totalInstallments - completedCount, 0);
+
+      const completed = Array.from({ length: Math.min(3, completedCount) }, (_, index) => {
+        const monthsAgo = completedCount - index;
+        return addMonths(originatedAt, monthsAgo);
+      });
+
+      const upcoming = Array.from({ length: Math.min(3, upcomingCount) }, (_, index) => {
+        const monthsAhead = normalizedMonthsElapsed + index + 1;
+        return addMonths(originatedAt, monthsAhead);
+      });
+
+      return { completed, upcoming };
+    })();
+
+    return {
+      originatedAt,
+      quotedRate,
+      monthlyPayment,
+      totalInstallments,
+      normalizedMonthsElapsed,
+      amountRepaid,
+      remainingBalance,
+      progressPercent,
+      installmentsRemaining,
+      nextPaymentDate,
+      schedulePreview,
+    };
+  }, [loanInFocus, statusInfo.tone]);
+
+  const {
+    originatedAt,
+    quotedRate,
+    monthlyPayment,
+    totalInstallments,
+    amountRepaid,
+    remainingBalance,
+    progressPercent,
+    installmentsRemaining,
+    nextPaymentDate,
+    schedulePreview,
+  } = computedLoanMetrics;
 
   if (!loanInFocus) {
     return (
@@ -210,60 +310,6 @@ export function RepaymentTracker({ user, onBack }: RepaymentTrackerProps) {
       </div>
     );
   }
-
-  const originatedAt = loanInFocus.createdAt ? new Date(loanInFocus.createdAt * 1000) : null;
-  const quotedRate = toDisplayRate(loanInFocus.quotedRate ?? loanInFocus.interestRate ?? null);
-  const monthlyPayment = calculateMonthlyPayment(
-    loanInFocus.amount,
-    quotedRate ?? 0,
-    loanInFocus.term || loanInFocus.tenor || 0
-  );
-
-  const totalInstallments = loanInFocus.term || loanInFocus.tenor || 0;
-  const now = new Date();
-  const rawMonthsElapsed = originatedAt ? monthsBetween(originatedAt, now) : 0;
-  const normalizedMonthsElapsed = statusInfo.tone === 'completed'
-    ? totalInstallments
-    : Math.min(totalInstallments, rawMonthsElapsed);
-
-  const totalDue = monthlyPayment * totalInstallments;
-  const amountRepaid = statusInfo.tone === 'completed'
-    ? totalDue
-    : Math.min(totalDue, monthlyPayment * normalizedMonthsElapsed);
-  const remainingBalance = Math.max(totalDue - amountRepaid, 0);
-  const repaymentProgress = totalDue > 0 ? Math.min(1, amountRepaid / totalDue) : 0;
-  const progressPercent = Math.round(repaymentProgress * 100);
-  const installmentsRemaining = Math.max(totalInstallments - normalizedMonthsElapsed, 0);
-
-  const nextPaymentDate = (() => {
-    if (!originatedAt) {
-      return null;
-    }
-    if (statusInfo.tone === 'completed' || installmentsRemaining <= 0) {
-      return null;
-    }
-    return addMonths(originatedAt, normalizedMonthsElapsed + 1);
-  })();
-
-  const schedulePreview = useMemo(() => {
-    if (!originatedAt || totalInstallments <= 0) {
-      return { completed: [], upcoming: [] };
-    }
-    const completedCount = Math.min(normalizedMonthsElapsed, totalInstallments);
-    const upcomingCount = Math.max(totalInstallments - completedCount, 0);
-
-    const completed = Array.from({ length: Math.min(3, completedCount) }, (_, index) => {
-      const monthsAgo = completedCount - index;
-      return addMonths(originatedAt, monthsAgo);
-    });
-
-    const upcoming = Array.from({ length: Math.min(3, upcomingCount) }, (_, index) => {
-      const monthsAhead = normalizedMonthsElapsed + index + 1;
-      return addMonths(originatedAt, monthsAhead);
-    });
-
-    return { completed, upcoming };
-  }, [originatedAt, normalizedMonthsElapsed, totalInstallments]);
 
   const verifiedActions = user.ecoActions.filter((action) => action.verified).length;
   const totalActions = user.ecoActions.length;

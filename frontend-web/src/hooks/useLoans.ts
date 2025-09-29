@@ -2,8 +2,9 @@
  * Loans Hook
  * Manages loan applications and offers
  */
+import axios, { AxiosError } from 'axios';
 import { useCallback, useEffect, useState } from 'react';
-import { loans, LoanRecord } from '../lib/api';
+import { loans, LoanRecord, LoanOffersResponse, LoanQuoteOption } from '../lib/api';
 
 interface QuoteParams {
   amount: number;
@@ -15,9 +16,23 @@ const DEFAULT_QUOTE: QuoteParams = {
   tenor: 12,
 };
 
+const deriveErrorMessage = (error: unknown, fallback: string): string => {
+  if (axios.isAxiosError(error)) {
+    return (
+      (error as AxiosError<{ detail?: string }>).response?.data?.detail ||
+      error.message ||
+      fallback
+    );
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return fallback;
+};
+
 export const useLoans = () => {
   const [userLoans, setUserLoans] = useState<LoanRecord[]>([]);
-  const [loanOffers, setLoanOffers] = useState<any[]>([]);
+  const [loanOffers, setLoanOffers] = useState<LoanQuoteOption[]>([]);
   const [quoteParams, setQuoteParams] = useState<QuoteParams>(DEFAULT_QUOTE);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,12 +64,12 @@ export const useLoans = () => {
       try {
         setLoading(true);
         setError(null);
-        const response = await loans.getLoanOffers({ amount: payload.amount, tenor: payload.tenor });
-        const options = Array.isArray(response?.options) ? response.options : response ?? [];
-        setLoanOffers(options);
+        const response: LoanOffersResponse = await loans.getLoanOffers({ amount: payload.amount, tenor: payload.tenor });
+        setLoanOffers(Array.isArray(response.options) ? response.options : []);
         setQuoteParams(payload);
-      } catch (err: any) {
-        setError(err?.response?.data?.detail || 'Failed to fetch loan offers');
+      } catch (err) {
+        const message = deriveErrorMessage(err, 'Failed to fetch loan offers');
+        setError(message);
         console.error('Error fetching loan offers:', err);
       } finally {
         setLoading(false);
@@ -70,8 +85,9 @@ export const useLoans = () => {
       const loansData = await loans.getUserLoans();
       setUserLoans(loansData);
       await fetchLoanOffers(undefined, loansData);
-    } catch (err: any) {
-      setError(err?.response?.data?.detail || 'Failed to fetch loans');
+    } catch (err) {
+      const message = deriveErrorMessage(err, 'Failed to fetch loans');
+      setError(message);
       console.error('Error fetching loans:', err);
     } finally {
       setLoading(false);
@@ -87,8 +103,9 @@ export const useLoans = () => {
         await fetchUserLoans();
         await fetchLoanOffers({ amount, tenor });
         return result;
-      } catch (err: any) {
-        setError(err?.response?.data?.detail || 'Failed to apply for loan');
+      } catch (err) {
+        const message = deriveErrorMessage(err, 'Failed to apply for loan');
+        setError(message);
         console.error('Error applying for loan:', err);
         throw err;
       } finally {
@@ -107,8 +124,9 @@ export const useLoans = () => {
         await fetchUserLoans();
         await fetchLoanOffers();
         return result;
-      } catch (err: any) {
-        setError(err?.response?.data?.detail || 'Failed to accept loan offer');
+      } catch (err) {
+        const message = deriveErrorMessage(err, 'Failed to accept loan offer');
+        setError(message);
         console.error('Error accepting loan offer:', err);
         throw err;
       } finally {

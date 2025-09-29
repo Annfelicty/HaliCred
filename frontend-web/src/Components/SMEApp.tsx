@@ -4,7 +4,7 @@ import { loans, profile, ai } from '../lib/api';
 import type { LoanRecord } from '../lib/api';
 import { SMEOnboarding } from './Sme/SMEOnboarding';
 import { SMEDashboard } from './Sme/SMEDashboard';
-import { EvidenceUpload } from './Sme/EvidenceUpload';
+import { EvidenceUpload, EvidenceUploadResult } from './Sme/EvidenceUpload';
 import { LoanOffers } from './Sme/LoanOffers';
 import { RepaymentTracker } from './Sme/RepaymentTracker';
 
@@ -271,7 +271,9 @@ export function SMEApp({ onBack }: SMEAppProps) {
     setCurrentStep('dashboard');
   };
 
-  const handleEvidenceUploaded = async (evidence: any) => {
+  const handleEvidenceUploaded = async (
+    evidence: EvidenceUploadResult,
+  ) => {
     setUser((previous) => {
       if (!previous) {
         return previous;
@@ -284,7 +286,7 @@ export function SMEApp({ onBack }: SMEAppProps) {
         description: evidence.description,
         date: new Date().toLocaleDateString(),
         verified,
-        impact: evidence.impact,
+        impact: evidence.impact ?? 'Eco-impact calculated',
       };
 
       const nextUser: SMEUser = {

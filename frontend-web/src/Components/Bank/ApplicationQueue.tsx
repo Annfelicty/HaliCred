@@ -29,19 +29,20 @@ export function ApplicationQueue({ applications, onReviewApplication, onBack }: 
       return matchesStatus && matchesSearch;
     })
     .sort((a, b) => {
-      switch (sortBy) {
-        case 'greenScore':
-          return b.greenScore - a.greenScore;
-        case 'amount':
-          return b.amount - a.amount;
-        case 'date':
-          return new Date(b.appliedDate).getTime() - new Date(a.appliedDate).getTime();
-        case 'risk':
-          const riskOrder = { low: 1, medium: 2, high: 3 };
-          return riskOrder[b.riskAssessment.fraudRisk] - riskOrder[a.riskAssessment.fraudRisk];
-        default:
-          return 0;
+      if (sortBy === 'greenScore') {
+        return b.greenScore - a.greenScore;
       }
+      if (sortBy === 'amount') {
+        return b.amount - a.amount;
+      }
+      if (sortBy === 'date') {
+        return new Date(b.appliedDate).getTime() - new Date(a.appliedDate).getTime();
+      }
+      if (sortBy === 'risk') {
+        const riskOrder = { low: 1, medium: 2, high: 3 } as const;
+        return riskOrder[b.riskAssessment.fraudRisk] - riskOrder[a.riskAssessment.fraudRisk];
+      }
+      return 0;
     });
 
   const getStatusIcon = (status: string) => {

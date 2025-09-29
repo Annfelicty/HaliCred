@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+import json
 import requests
 
 logger = logging.getLogger(__name__)
@@ -69,18 +70,21 @@ class ClimatiqClient:
             "activity_id": activity_id,
             "region": region,
             "category": category,
-            "lifecycle_stage": lifecycle_stage,
+            "results_per_page": extra_params.pop("results_per_page", 1),
+            "data_version": extra_params.pop("data_version", os.getenv("CLIMATIQ_DATA_VERSION", "26.26")),
+            "unit_type": extra_params.pop("unit_type", None),
+            "lax": extra_params.pop("lax", None),
             **extra_params,
-        }.items() if v}
+        }.items() if v is not None}
 
-        cache_key = f"ef|{sorted(params.items())}"
+        cache_key = f"ef|{json.dumps(params, sort_keys=True)}"
         cached = self._get_cache(cache_key)
         if cached is not None:
             return cached
 
         try:
             response = requests.get(
-                f"{self.base_url}/data/v1/emission-factors",
+                f"{self.base_url}/data/v1/search",
                 headers=self._headers(),
                 params=params,
                 timeout=20,
@@ -102,14 +106,14 @@ class ClimatiqClient:
         if not self.api_key:
             return None
 
-        cache_key = f"estimate|{hash(frozenset(payload.items()))}"
+        cache_key = f"estimate|{json.dumps(payload, sort_keys=True)}"
         cached = self._get_cache(cache_key)
         if cached is not None:
             return cached
 
         try:
             response = requests.post(
-                f"{self.base_url}/estimate",
+                f"{self.base_url}/data/v1/estimate",
                 headers=self._headers(),
                 json=payload,
                 timeout=30,

@@ -7,7 +7,6 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 import uuid
 import os
-import tempfile
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -86,9 +85,8 @@ async def process_evidence(
         if file.size > 50 * 1024 * 1024:  # 50MB limit
             raise HTTPException(status_code=413, detail="File too large")
         
-        # Save file temporarily using cross-platform temp directory
-        temp_dir = tempfile.gettempdir()
-        file_path = os.path.join(temp_dir, f"{uuid.uuid4()}_{file.filename}")
+        # Save file temporarily
+        file_path = f"/tmp/{uuid.uuid4()}_{file.filename}"
         with open(file_path, "wb") as buffer:
             content = await file.read()
             buffer.write(content)
@@ -153,7 +151,7 @@ async def get_current_greenscore(
     Get user's current GreenScore and breakdown
     """
     try:
-        current_score = await ai_service.get_user_greenscore_current(str(user.id))
+        current_score = ai_service.get_user_greenscore_current(str(user.id))
         
         if not current_score:
             return {
@@ -169,6 +167,10 @@ async def get_current_greenscore(
         raise HTTPException(status_code=500, detail=str(e))
 
 # Helper function to get AI service
+def get_ai_service(db: Session = Depends(get_db)) -> AIService:
+    """Dependency to get AI service instance"""
+    return AIService(db)
+
 @router.get("/greenscore/history", response_model=ScoreHistoryResponse)
 async def get_greenscore_history(
     months: int = 12,
@@ -179,7 +181,7 @@ async def get_greenscore_history(
     Get user's GreenScore history and trends
     """
     try:
-        history = await ai_service.get_user_greenscore_history(str(user.id), months)
+        history = ai_service.get_user_greenscore_history(str(user.id), months)
         
         # Calculate trend
         trend = "stable"
@@ -216,7 +218,7 @@ async def get_carbon_credits_portfolio(
     Get user's carbon credits portfolio
     """
     try:
-        portfolio = await ai_service.get_carbon_credits_portfolio(str(user.id))
+        portfolio = ai_service.get_user_carbon_credits_portfolio(str(user.id))
         return portfolio
     except Exception as e:
         logger.error(f"Error getting carbon credits portfolio: {str(e)}")
@@ -297,16 +299,6 @@ async def get_sector_analytics(
     except Exception as e:
         logger.error(f"Error getting sector analytics: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/sector/analytics")
-async def get_sector_analytics_alias(
-    sector: str,
-    region: str = "Kenya",
-    user: User = Depends(get_current_user)
-):
-    """Alias route to match frontend expectations (legacy contract)."""
-    return await get_sector_analytics(sector=sector, region=region, user=user)
 
 # Admin and Review Endpoints
 

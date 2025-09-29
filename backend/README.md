@@ -3,6 +3,11 @@
 ## Overview
 HaliScore is an AI-powered eco-finance platform that transforms sustainable actions into financial credibility. This backend provides APIs for user authentication, evidence management, AI-powered Green Score calculation, and loan management.
 
+### Phase 7 Highlights
+- Live AI orchestration now runs against external services (Google Gemini, Google Vision, Climatiq GA API) with no simulation fallbacks.
+- `AIService.process_evidence_request()` streams evidence through `AIOrchestrator`, persisting genuine `GreenScoreResult` rows.
+- Climatiq GA factor discovery requires a valid `activity_id`/`data_version`; see [AI Services](#ai-services) for current guidance.
+
 ## Prerequisites
 
 ### System Requirements
@@ -60,12 +65,6 @@ sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE haliscore TO user;"
 ```bash
 # Download MinIO
 wget https://dl.min.io/server/minio/release/linux-amd64/minio
-chmod +x minio
-
-# Start MinIO
-./minio server /tmp/minio --console-address ":9001"
-```
-
 ### 5. Environment Configuration
 Create a `.env` file in the backend directory:
 ```bash
@@ -98,6 +97,14 @@ BACKEND_CORS_ORIGINS=["http://localhost:3000", "http://localhost:8080"]
 # Environment
 ENVIRONMENT=development
 DEBUG=true
+
+# AI Integrations (Phase 7)
+GEMINI_API_KEY=your-gemini-api-key
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/google-vision.json
+CLIMATIQ_API_KEY=your-climatiq-api-key
+CLIMATIQ_DATA_VERSION=26.26
+GOOGLE_VISION_CREDENTIALS_PATH=/absolute/path/to/google-vision.json  # optional alias
+AI_EVIDENCE_TMP_DIR=./uploads/tmp
 ```
 
 ### 6. Generate JWT Keys (Optional)
@@ -171,6 +178,12 @@ Once the server is running, you can access:
 - `POST /score/compute` - Compute AI-powered Green Score
 - `GET /score/me` - Get current user's Green Score
 
+### AI Engine
+- `POST /ai/evidence/process` - Run evidence through the live AI orchestrator
+- `GET /ai/greenscore/current` - Fetch the most recent AI-generated score
+- `GET /ai/greenscore/history` - Retrieve score history
+- `GET /ai/carbon-credits/portfolio` - Summaries of projected carbon credits
+
 ### Loan Management
 - `POST /loan/quote` - Get loan quote based on Green Score
 - `POST /loan/apply` - Apply for loan
@@ -196,6 +209,32 @@ The platform uses AI to analyze:
 - Celery workers handle OCR processing
 - Async evidence analysis
 - Real-time score updates
+
+### AI Services
+- Gemini orchestrates function calls to internal services.
+- Google Vision provides OCR + CV. Ensure `GOOGLE_APPLICATION_CREDENTIALS` points to a service account JSON with Vision scopes.
+- Climatiq GA `/data/v1/search` + `/data/v1/estimate` require a whitelisted `activity_id` and `data_version`. Current fallback: `electricity-supply_grid-source_residual_mix` with `26.26` (verify availability for your key).
+
+#### Verifying External Integrations
+```bash
+# Gemini sanity check
+python backend/run_live_ai_checks.py
+
+# Individual curl for Climatiq search
+curl -H "Authorization: Bearer $CLIMATIQ_API_KEY" \
+  "https://api.climatiq.io/data/v1/search?activity_id=electricity-supply_grid-source_residual_mix&data_version=26.26&results_per_page=1"
+
+# Google Vision basic OCR (requires gcloud SDK)
+python - <<'PY'
+from google.cloud import vision
+from google.oauth2 import service_account
+creds = service_account.Credentials.from_service_account_file('backend/keys/google-vision.json')
+client = vision.ImageAnnotatorClient(credentials=creds)
+with open('backend/sample-data/solar-panel.jpg','rb') as fh:
+    image = vision.Image(content=fh.read())
+print(client.label_detection(image=image).label_annotations[0].description)
+PY
+```
 
 ## Development Workflow
 
@@ -252,6 +291,21 @@ flake8 app/
    - Ensure Tesseract is installed
    - Check image file permissions
    - Verify image format is supported
+
+5. **Gemini API Error**
+   - Confirm `GEMINI_API_KEY` is loaded (no trailing spaces)
+   - Ensure the `models/gemini-2.5-flash` model is enabled for your project
+   - Monitor quota usage in the Google AI Studio console
+
+6. **Google Vision Credential Error**
+   - Path in `GOOGLE_APPLICATION_CREDENTIALS` must be absolute
+   - Service account requires `roles/vision.user`
+   - For container deployments, mount the credential JSON and set permissions
+
+7. **Climatiq 400 `no_emission_factors_found`**
+   - Confirm the requested `activity_id` exists in your catalog tier
+   - Try broadening `region` to `GLO` or using `lax=true`
+   - Reach out to Climatiq support to confirm dataset access or adjust `data_version`
 
 ### Logs
 - Application logs: Check terminal output

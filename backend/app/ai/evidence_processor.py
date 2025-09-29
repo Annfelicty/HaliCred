@@ -11,6 +11,7 @@ import re
 from base64 import b64encode
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 try:
     import pytesseract
     import cv2
@@ -461,34 +462,43 @@ class EvidenceProcessor:
             )
 
     async def _download_image(self, file_url: str) -> np.ndarray:
-        """Download image from URL and convert to OpenCV format"""
+        """Download image from URL or local path and convert to OpenCV format."""
         try:
             if not Image or not cv2:
-                # Return mock data if dependencies not available
                 return np.zeros((100, 100, 3), dtype=np.uint8)
-                
-            response = requests.get(file_url, timeout=30)
-            response.raise_for_status()
 
-            content_type = response.headers.get("Content-Type", "").lower()
-            file_extension = Path(file_url).suffix.lower()
+            parsed = urlparse(file_url)
 
-            if ("pdf" in content_type or file_extension == ".pdf") and convert_from_bytes and Image:
-                images = convert_from_bytes(response.content)
+            if parsed.scheme in ("", "file"):
+                local_path = Path(parsed.path if parsed.scheme else file_url)
+                if os.name == "nt" and parsed.scheme == "file" and parsed.path.startswith("/"):
+                    # Remove leading slash for Windows drive letters
+                    local_path = Path(parsed.path.lstrip("/"))
+                if not local_path.exists():
+                    raise FileNotFoundError(f"Local evidence file not found: {local_path}")
+                with open(local_path, "rb") as handle:
+                    content = handle.read()
+                content_type = "application/pdf" if local_path.suffix.lower() == ".pdf" else ""
+            else:
+                response = requests.get(file_url, timeout=30)
+                response.raise_for_status()
+                content = response.content
+                content_type = response.headers.get("Content-Type", "").lower()
+
+            file_extension = Path(parsed.path if parsed.path else file_url).suffix.lower()
+
+            if (("pdf" in content_type) or file_extension == ".pdf") and convert_from_bytes and Image:
+                images = convert_from_bytes(content)
                 if images:
                     pil_image = images[0]
                     return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
-            # Convert to PIL Image
-            pil_image = Image.open(io.BytesIO(response.content))
-
-            # Convert to OpenCV format
+            pil_image = Image.open(io.BytesIO(content))
             cv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
             return cv_image
-            
+
         except Exception as e:
             logger.error(f"Error downloading image: {str(e)}")
-            # Return blank image on error
             return np.zeros((100, 100, 3), dtype=np.uint8)
 
     async def _extract_text(self, image: np.ndarray) -> OCRResult:
@@ -496,28 +506,16 @@ class EvidenceProcessor:
         try:
             pil_image = None
             if Image and cv2:
-                # Convert OpenCV image to PIL for both pytesseract and Vision API
                 pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
 
-            # Prefer Google Vision when configured
             if self._vision_available():
                 vision_result = await self._google_vision_ocr(pil_image, image)
                 if vision_result:
                     return vision_result
 
             if not pytesseract or not Image or not cv2:
-                # Return mock OCR result if dependencies not available
-                return OCRResult(
-                    vendor="Green Energy Solutions Ltd",
-                    amount_ksh=45000.0,
-                    date="2024-01-15",
-                    items=["Solar Panel 300W", "Installation Kit"],
-                    confidence=0.85,
-                    raw_text="Solar Panel Installation Receipt - Amount: KES 45,000 - Green Energy Solutions Ltd",
-                    provenance={"engine": "mock"},
-                )
+                raise RuntimeError("OCR dependencies not available and Vision API not configured")
 
-            # Fallback to pytesseract when Vision unavailable
             pil_image = pil_image or Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
             raw_text = pytesseract.image_to_string(pil_image, config="--psm 6")
             confidence = self._calculate_ocr_confidence(raw_text)

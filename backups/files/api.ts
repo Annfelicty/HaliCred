@@ -2,7 +2,8 @@
  * API Client for HaliCred Backend
  * Handles all HTTP requests to the FastAPI backend
  */
-import axios, { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
+import axios from 'axios';
+import type { AxiosError } from 'axios';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
@@ -17,28 +18,22 @@ const apiClient = axios.create({
 
 // Request interceptor to add auth token
 apiClient.interceptors.request.use(
-  (config: InternalAxiosRequestConfig) => {
+  (config: any) => {
     const token = localStorage.getItem('access_token');
     if (token) {
-      if (typeof config.headers?.set === 'function') {
-        config.headers.set('Authorization', `Bearer ${token}`);
-      } else {
-        config.headers = {
-          ...(config.headers ?? {}),
-          Authorization: `Bearer ${token}`,
-        } as InternalAxiosRequestConfig['headers'];
-      }
+      config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
   },
-  (error: AxiosError) => Promise.reject(error)
+  (error: any) => Promise.reject(error)
 );
 
 // Response interceptor for error handling
 apiClient.interceptors.response.use(
-  (response: AxiosResponse) => response,
-  (error: AxiosError) => {
+  (response: any) => response,
+  (error: any) => {
     if (error.response?.status === 401) {
+      // Clear token and redirect to login
       localStorage.removeItem('access_token');
       localStorage.removeItem('user');
       window.location.href = '/';
@@ -123,74 +118,26 @@ export interface GreenScore {
   actions: string[];
 }
 
-export interface ScoreHistoryEntry {
-  date: string | number | Date;
-  greenscore: number;
-  change: number;
-  evidence_count: number;
-  co2_saved_tonnes: number;
-}
-
-export interface ScoreHistoryResponse {
-  user_id: string;
-  scores: ScoreHistoryEntry[];
-  trend: string;
-  improvement_suggestions: string[];
-}
-
-export interface AIProcessingResponse {
-  request_id: string;
-  status: string;
-  message: string;
-  processing_time_ms?: number;
-  greenscore?: number;
-  confidence?: number;
-  carbon_credits?: unknown;
-  review_required?: boolean;
-}
-
-export interface CarbonCreditSummary {
-  count: number;
-  tonnes_co2: number;
-  value_usd: number;
-}
-
-export interface CarbonCreditIssuance {
-  credit_id: string;
-  evidence_id: string;
-  standard: string;
-  tonnes_co2: number;
-  net_value_usd: number;
-  issued_at: string | null;
-}
-
-export interface CarbonCreditRecord {
-  id: string;
-  evidence_id: string;
-  greenscore_result_id: string;
-  standard: string;
-  status: string;
-  approach: string;
-  tonnes_co2: number;
-  annual_tonnes: number;
-  gross_value_usd: number;
-  net_value_usd: number;
-  estimated_issuance: string | null;
-  actual_issuance: string | null;
-  registry_id: string | null;
-  created_at: string;
-}
-
 export interface CarbonCreditsPortfolio {
   user_id: string;
-  summary: {
-    issued: CarbonCreditSummary;
-    pending: CarbonCreditSummary;
-    eligible: CarbonCreditSummary;
-    overall: CarbonCreditSummary;
+  total_credits: {
+    issued: number;
+    pending: number;
+    projected: number;
   };
-  recent_issuances: CarbonCreditIssuance[];
-  credits: CarbonCreditRecord[];
+  total_value_usd: {
+    earned: number;
+    pending: number;
+    projected: number;
+  };
+  credits_by_standard: Record<string, { tonnes: number; value: number }>;
+  recent_issuances: Array<{
+    date: string;
+    tonnes: number;
+    standard: string;
+    value_usd: number;
+    project: string;
+  }>;
 }
 
 export interface LoanRecord {
@@ -204,23 +151,13 @@ export interface LoanRecord {
   greenscore_snapshot?: Record<string, unknown> | null;
 }
 
-export interface LoanQuoteOption {
-  tenor: number;
-  rate: number;
-  discount_reason?: string;
-}
-
-export interface LoanOffersResponse {
-  options: LoanQuoteOption[];
-}
-
 // API Functions
 
 // Authentication
 const normalizeError = (error: unknown): never => {
   if (axios.isAxiosError(error)) {
-    const payload = (error.response?.data as { detail?: string } | undefined)?.detail;
-    const message = payload ?? error.message ?? 'Request failed';
+    const axiosError = error as AxiosError<{ detail?: string }>;
+    const message = axiosError.response?.data?.detail || axiosError.message || 'Request failed';
     throw new Error(message);
   }
   if (error instanceof Error) {
@@ -290,7 +227,7 @@ export const profile = {
 
 // AI Engine / Evidence Processing
 export const ai = {
-  processEvidence: async (evidenceData: EvidenceUpload): Promise<AIProcessingResponse> => {
+  processEvidence: async (evidenceData: EvidenceUpload) => {
     const formData = new FormData();
     formData.append('file', evidenceData.file);
     formData.append('sector', evidenceData.sector);
@@ -300,24 +237,24 @@ export const ai = {
       formData.append('description', evidenceData.description);
     }
 
-    const response = await apiClient.post<AIProcessingResponse>('/ai/evidence/process', formData, {
+    const response = await apiClient.post('/ai/evidence/process', formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
     });
     return response.data;
   },
 
   getCurrentGreenScore: async (): Promise<GreenScore | null> => {
-    const response = await apiClient.get<GreenScore | null>('/ai/greenscore/current');
+    const response = await apiClient.get('/ai/greenscore/current');
     return response.data;
   },
 
-  getGreenScoreHistory: async (months: number = 12): Promise<ScoreHistoryResponse> => {
-    const response = await apiClient.get<ScoreHistoryResponse>(`/ai/greenscore/history?months=${months}`);
+  getGreenScoreHistory: async (months: number = 12) => {
+    const response = await apiClient.get(`/ai/greenscore/history?months=${months}`);
     return response.data;
   },
 
   getCarbonCreditsPortfolio: async (): Promise<CarbonCreditsPortfolio> => {
-    const response = await apiClient.get<CarbonCreditsPortfolio>('/ai/carbon-credits/portfolio');
+    const response = await apiClient.get('/ai/carbon-credits/portfolio');
     return response.data;
   },
 
@@ -329,9 +266,9 @@ export const ai = {
 
 // Loan Management
 export const loans = {
-  applyForLoan: async (loanData: { amount: number; tenor: number; purpose?: string }): Promise<LoanRecord> => {
+  applyForLoan: async (loanData: { amount: number; tenor: number; purpose?: string }) => {
     try {
-      const response = await apiClient.post<LoanRecord>('/loan/apply', loanData);
+      const response = await apiClient.post('/loan/apply', loanData);
       return response.data;
     } catch (error) {
       throw normalizeError(error);
@@ -340,25 +277,25 @@ export const loans = {
 
   getUserLoans: async (): Promise<LoanRecord[]> => {
     try {
-      const response = await apiClient.get<LoanRecord[]>('/loan/my');
+      const response = await apiClient.get('/loan/my');
       return response.data;
     } catch (error) {
       throw normalizeError(error);
     }
   },
 
-  getLoanOffers: async (payload: { amount: number; tenor: number }): Promise<LoanOffersResponse> => {
+  getLoanOffers: async (payload: { amount: number; tenor: number }) => {
     try {
-      const response = await apiClient.post<LoanOffersResponse>('/loan/quote', payload);
+      const response = await apiClient.post('/loan/quote', payload);
       return response.data;
     } catch (error) {
       throw normalizeError(error);
     }
   },
 
-  acceptLoanOffer: async (loanId: string): Promise<LoanRecord> => {
+  acceptLoanOffer: async (loanId: string) => {
     try {
-      const response = await apiClient.post<LoanRecord>(`/admin/applications/${loanId}/decision`, { decision: 'approve' });
+      const response = await apiClient.post(`/admin/applications/${loanId}/decision`, { decision: 'approve' });
       return response.data;
     } catch (error) {
       throw normalizeError(error);

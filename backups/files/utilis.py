@@ -5,10 +5,7 @@ This module provides utility functions for user management, role checks, S3 pres
 scoring, and loan rate calculations.
 """
 
-import os
-import boto3
-import time
-import logging
+import os, boto3, time
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import jwt
@@ -26,19 +23,12 @@ LOANS = {}
 
 security = HTTPBearer(auto_error=False)
 
-# Logging setup
-logger = logging.getLogger(__name__)
-
 # Initialize Celery
 celery_app = Celery(
     'hali_score',
     broker=os.environ.get('CELERY_BROKER_URL', 'redis://localhost:6379/0'),
     backend=os.environ.get('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
 )
-
-if os.environ.get("CELERY_TASK_ALWAYS_EAGER") == "1":
-    celery_app.conf.task_always_eager = True
-    celery_app.conf.task_eager_propagates = True
 
 # Configure S3/MinIO client
 try:
@@ -49,7 +39,7 @@ try:
         aws_secret_access_key=os.environ.get("S3_SECRET_KEY", "minioadmin"),
     )
 except Exception as e:
-    logger.warning("S3 client initialization failed: %s", e)
+    print(f"S3 client initialization failed: {e}")
     s3_client = None
 
 def get_or_create_user(phone, full_name=None):
@@ -102,7 +92,7 @@ def create_presigned_put(key: str, content_type: str, expires=600) -> str:
             ExpiresIn=expires,
         )
     except Exception as e:
-        logger.warning("Failed to generate presigned URL: %s", e)
+        print(f"Failed to generate presigned URL: {e}")
         return f"http://localhost:9000/upload/{key}"
 
 # AI-powered scoring
@@ -146,8 +136,9 @@ def process_ocr(evidence_id: str) -> bool:
             return True
         return False
     except Exception as e:
-        logger.error("OCR processing failed: %s", e)
+        print(f"OCR processing failed: {e}")
         return False
+
 @celery_app.task
 def process_climate_practices(evidence_id: str) -> Dict:
     """Detect climate-smart practices from evidence."""
@@ -159,5 +150,4 @@ def process_climate_practices(evidence_id: str) -> Dict:
             return result
         return {"error": "Evidence not found"}
     except Exception as e:
-        logger.error("Climate practices processing failed: %s", e, exc_info=True)
         return {"error": str(e)}

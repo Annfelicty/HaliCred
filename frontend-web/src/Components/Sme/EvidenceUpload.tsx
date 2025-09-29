@@ -10,9 +10,19 @@ import type { LucideIcon } from 'lucide-react';
 import { ArrowLeft, Camera, Upload, Leaf, Lightbulb, Droplets, Sun, Zap, Sparkles, Trophy, Target, Gift, Star, CheckCircle } from 'lucide-react';
 import { ai } from '../../lib/api';
 
+export type EvidenceUploadResult = {
+  type: string;
+  description: string;
+  cost?: string;
+  impact?: string;
+  greenscore?: number | null;
+  confidence?: number | null;
+  requestId?: string;
+};
+
 interface EvidenceUploadProps {
   businessType: 'farmer' | 'salon' | 'welding' | 'other';
-  onEvidenceUploaded: (evidence: any) => void;
+  onEvidenceUploaded: (evidence: EvidenceUploadResult) => void;
   onBack: () => void;
 }
 
@@ -120,7 +130,6 @@ export function EvidenceUpload({ businessType, onEvidenceUploaded, onBack }: Evi
         type: selectedType,
         description,
         cost,
-        file: uploadedFile,
         impact: selectedAction?.impact || 'Eco-impact calculated',
         greenscore: response?.greenscore ?? null,
         confidence: response?.confidence ?? null,
