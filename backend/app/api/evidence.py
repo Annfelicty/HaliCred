@@ -8,15 +8,18 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.orm import Session
 from typing import Dict, Any, List
 import uuid
+import logging
 from datetime import datetime
 
 from app.db import get_db
 from app.models import User, Evidence
 from app.utilis import create_presigned_put, process_ocr, process_climate_practices
+from app.ai.evidence_processor import evidence_processor
 from app.config import settings
 from app.auth import get_current_user
 
 router = APIRouter(prefix="/evidence", tags=["evidence"])
+logger = logging.getLogger(__name__)
 
 @router.post("/", response_model=Dict[str, Any])
 async def create_evidence(
@@ -63,6 +66,72 @@ async def create_evidence(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create evidence: {str(e)}"
+        )
+
+@router.post("/upload", response_model=Dict[str, Any])
+async def upload_evidence_file(
+    file: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Upload and process evidence file with comprehensive validation.
+
+    Args:
+        file: Uploaded file (JPEG, PNG, PDF, TIFF only)
+        user: Current authenticated user
+        db: Database session
+
+    Returns:
+        Dict with processing results
+    """
+    try:
+        # Generate evidence ID
+        evidence_uuid = uuid.uuid4()
+        evidence_id = str(evidence_uuid)
+
+        # Create evidence record in database
+        evidence = Evidence(
+            id=evidence_uuid,
+            user_id=user.id,
+            status="processing"
+        )
+        db.add(evidence)
+        db.commit()
+        db.refresh(evidence)
+
+        # Save uploaded file temporarily for processing
+        import tempfile
+        import os
+
+        temp_dir = tempfile.mkdtemp()
+        temp_file_path = os.path.join(temp_dir, f"{evidence_id}_{file.filename}")
+
+        # Write file content
+        with open(temp_file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+
+        # Process evidence file with robust validation
+        result = await evidence_processor.process_evidence_file(
+            evidence_id=evidence_id,
+            file_path=temp_file_path,
+            db=db
+        )
+
+        # Clean up temporary file
+        try:
+            os.unlink(temp_file_path)
+            os.rmdir(temp_dir)
+        except Exception as cleanup_error:
+            logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
+
+        return result
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process evidence file: {str(e)}"
         )
 
 @router.post("/{evidence_id}/finalize", response_model=Dict[str, Any])

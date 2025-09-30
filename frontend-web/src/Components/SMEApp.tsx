@@ -214,45 +214,60 @@ export function SMEApp({ onBack }: SMEAppProps) {
     loadUserData();
   }, [loadUserData]);
 
-  const handleCompleteOnboarding = (userData: {
+  const handleCompleteOnboarding = async (userData: {
     name: string;
     phone: string;
     businessType: 'farmer' | 'salon' | 'welding' | 'other';
     businessName: string;
     location: string;
   }) => {
-    const composedUser: SMEUser = {
-      id: user?.id || identity?.id || '',
-      name: userData.name,
-      phone: userData.phone,
-      email: user?.email ?? identity?.email,
-      businessType: userData.businessType,
-      businessName: userData.businessName,
-      location: userData.location,
-      greenScore: user?.greenScore ?? 45,
-      ecoActions: user?.ecoActions ?? [],
-      loanApplications: user?.loanApplications ?? [],
-    };
+    try {
+      // Save business profile to backend
+      await profile.updateProfile({
+        business_type: userData.businessType,
+        business_name: userData.businessName,
+        location: userData.location,
+        full_name: userData.name,
+        phone: userData.phone
+      });
 
-    setUser(composedUser);
-    setCurrentStep('dashboard');
-    persistUser(composedUser);
+      // Create local user object for immediate UI update
+      const composedUser: SMEUser = {
+        id: user?.id || identity?.id || '',
+        name: userData.name,
+        phone: userData.phone,
+        email: user?.email ?? identity?.email,
+        businessType: userData.businessType,
+        businessName: userData.businessName,
+        location: userData.location,
+        greenScore: user?.greenScore ?? 45,
+        ecoActions: user?.ecoActions ?? [],
+        loanApplications: user?.loanApplications ?? [],
+      };
 
-    (async () => {
-      try {
-        await profile.updateProfile({
-          full_name: userData.name,
-          phone: userData.phone,
-          business_type: userData.businessType,
-          business_name: userData.businessName,
-          location: userData.location,
-        });
-      } catch (error) {
-        console.error('Failed to persist profile details:', error);
-      } finally {
-        loadUserData();
-      }
-    })();
+      setUser(composedUser);
+      setCurrentStep('dashboard');
+      persistUser(composedUser);
+    } catch (error) {
+      console.error('Failed to save business profile:', error);
+      // Still proceed to dashboard with local data
+      const composedUser: SMEUser = {
+        id: user?.id || identity?.id || '',
+        name: userData.name,
+        phone: userData.phone,
+        email: user?.email ?? identity?.email,
+        businessType: userData.businessType,
+        businessName: userData.businessName,
+        location: userData.location,
+        greenScore: user?.greenScore ?? 45,
+        ecoActions: user?.ecoActions ?? [],
+        loanApplications: user?.loanApplications ?? [],
+      };
+
+      setUser(composedUser);
+      setCurrentStep('dashboard');
+      persistUser(composedUser);
+    }
   };
 
   const handleUploadEvidence = () => {

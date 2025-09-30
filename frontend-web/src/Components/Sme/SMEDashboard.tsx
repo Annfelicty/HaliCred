@@ -3,6 +3,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../Ui
 import { Badge } from '../Ui/badge';
 import { Progress } from '../Ui/progress';
 import { SMEUser } from '../SMEApp';
+import { useGreenScore } from '../../hooks/useGreenScore';
+import { useEffect, useState } from 'react';
+import { ai } from '../../lib/api';
+import { Spinner, LoadingOverlay, DashboardSkeleton, ErrorState, LoadingButton } from '../Ui/loading';
+import {
+  SkipLink,
+  VisuallyHidden,
+  AccessibleIcon,
+  AccessibleProgress,
+  useReducedMotion,
+  focusVisibleClasses
+} from '../Ui/accessibility';
 import {
   Leaf,
   ArrowLeft,
@@ -134,32 +146,112 @@ interface SMEDashboardProps {
 }
 
 export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepayments, onBack }: SMEDashboardProps) {
+  const { greenScore, loading: scoreLoading, error: scoreError, fetchCurrentScore } = useGreenScore();
+  const [recommendations, setRecommendations] = useState<any[]>([]);
+  const [loadingRecommendations, setLoadingRecommendations] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const prefersReducedMotion = useReducedMotion();
+
+  useEffect(() => {
+    const loadInitialData = async () => {
+      try {
+        await Promise.all([
+          fetchCurrentScore(),
+          fetchRecommendations()
+        ]);
+      } finally {
+        setInitialLoading(false);
+      }
+    };
+
+    loadInitialData();
+  }, []);
+
+  const fetchRecommendations = async () => {
+    try {
+      setLoadingRecommendations(true);
+      // Fetch personalized recommendations from the API
+      const response = await fetch('/api/ai/carbon-credits/recommendations', {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setRecommendations(data.recommendations || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch recommendations:', error);
+      // Keep hardcoded fallback if API fails
+    } finally {
+      setLoadingRecommendations(false);
+    }
+  };
+
   const getScoreColor = (score: number) => {
     if (score >= 80) return 'text-green-600';
     if (score >= 60) return 'text-yellow-600';
     return 'text-red-600';
   };
 
+  // Use real subscore data from API or fallback to user.greenScore-based values
   const ecoCategories = [
-    { name: 'Energy', icon: Zap, score: Math.min(100, user.greenScore + Math.floor(Math.random() * 20)), color: 'text-yellow-600' },
-    { name: 'Water', icon: Droplets, score: Math.min(100, user.greenScore + Math.floor(Math.random() * 20)), color: 'text-blue-600' },
-    { name: 'Waste', icon: Recycle, score: Math.min(100, user.greenScore + Math.floor(Math.random() * 20)), color: 'text-green-600' },
-    { name: 'Behavior', icon: User, score: Math.min(100, user.greenScore + Math.floor(Math.random() * 20)), color: 'text-purple-600' }
+    {
+      name: 'Energy',
+      icon: Zap,
+      score: greenScore?.subscores?.energy_efficiency || Math.max(0, user.greenScore - 10),
+      color: 'text-yellow-600'
+    },
+    {
+      name: 'Water',
+      icon: Droplets,
+      score: greenScore?.subscores?.water_conservation || Math.max(0, user.greenScore - 5),
+      color: 'text-blue-600'
+    },
+    {
+      name: 'Waste',
+      icon: Recycle,
+      score: greenScore?.subscores?.waste_management || Math.max(0, user.greenScore - 8),
+      color: 'text-green-600'
+    },
+    {
+      name: 'Renewable',
+      icon: User,
+      score: greenScore?.subscores?.renewable_energy || Math.max(0, user.greenScore - 12),
+      color: 'text-purple-600'
+    }
   ];
 
-  const improvementTips = [
-    { action: 'Install LED lighting', points: '+15 pts', description: 'Replace incandescent bulbs' },
-    { action: 'Solar water heating', points: '+20 pts', description: 'Reduce electricity usage' },
-    { action: 'Waste separation', points: '+10 pts', description: 'Sort organic vs recyclable' },
-    { action: 'Energy audit', points: '+12 pts', description: 'Professional assessment' }
-  ];
+  // Use real AI recommendations or fallback to hardcoded tips
+  const improvementTips = recommendations.length > 0
+    ? recommendations.map(rec => ({
+        action: rec.action,
+        points: `+${Math.round(rec.estimated_co2_tonnes * 10)} pts`,
+        description: `ROI: ${rec.payback_period_months} months`
+      }))
+    : [
+        { action: 'Install LED lighting', points: '+15 pts', description: 'Replace incandescent bulbs' },
+        { action: 'Solar water heating', points: '+20 pts', description: 'Reduce electricity usage' },
+        { action: 'Waste separation', points: '+10 pts', description: 'Sort organic vs recyclable' },
+        { action: 'Energy audit', points: '+12 pts', description: 'Professional assessment' }
+      ];
 
-  const activeLoan = user.loanApplications.find((loan) => loan.backendStatus === 'active' || loan.backendStatus === 'disbursed');
-  const pendingLoan = user.loanApplications.find((loan) => loan.backendStatus === 'pending' || loan.backendStatus === 'submitted');
+  // Map backend status to frontend expected status
+  const mapLoanStatus = (loan: any) => {
+    if (!loan) return null;
+    // Backend returns 'status', frontend expects 'backendStatus'
+    const mappedLoan = { ...loan };
+    mappedLoan.backendStatus = loan.status || loan.backendStatus;
+    return mappedLoan;
+  };
+
+  const activeLoan = user.loanApplications.map(mapLoanStatus).find((loan) => loan?.backendStatus === 'active' || loan?.backendStatus === 'disbursed');
+  const pendingLoan = user.loanApplications.map(mapLoanStatus).find((loan) => loan?.backendStatus === 'pending' || loan?.backendStatus === 'submitted');
   const fallbackLoan =
-    user.loanApplications.find((loan) => loan.backendStatus === 'approved') ??
-    user.loanApplications.find((loan) => loan.backendStatus === 'completed' || loan.backendStatus === 'settled') ??
-    user.loanApplications[0] ??
+    user.loanApplications.map(mapLoanStatus).find((loan) => loan?.backendStatus === 'approved') ??
+    user.loanApplications.map(mapLoanStatus).find((loan) => loan?.backendStatus === 'completed' || loan?.backendStatus === 'settled') ??
+    user.loanApplications.map(mapLoanStatus)[0] ??
     null;
 
   const loanInFocus = activeLoan ?? pendingLoan ?? fallbackLoan;
@@ -192,28 +284,87 @@ export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepaym
       : 'View Details'
     : 'View Details';
 
+  // Show loading skeleton on initial load
+  if (initialLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-green-50 to-teal-50 p-4">
+        <div className="max-w-md mx-auto">
+          <DashboardSkeleton />
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state if critical data failed to load
+  if (scoreError && !greenScore) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-green-50 to-teal-50 p-4">
+        <div className="max-w-md mx-auto">
+          <ErrorState
+            title="Unable to load dashboard"
+            description="We're having trouble loading your GreenScore and dashboard data."
+            action={{
+              label: "Try Again",
+              onClick: () => {
+                setInitialLoading(true);
+                fetchCurrentScore().finally(() => setInitialLoading(false));
+              }
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-green-50 to-teal-50 p-4 relative overflow-hidden">
-      {/* Animated Background Elements */}
-      <div className="absolute inset-0 bg-gradient-to-br from-green-400/10 via-emerald-400/10 to-teal-400/10 animate-pulse" />
-      <div className="absolute top-10 right-10 w-20 h-20 bg-green-400/20 rounded-full blur-xl animate-bounce" />
-      <div className="absolute bottom-20 left-10 w-16 h-16 bg-teal-400/20 rounded-full blur-lg animate-pulse" />
-      
+      {/* Skip Link for screen readers */}
+      <SkipLink href="#main-content">Skip to main content</SkipLink>
+
+      {/* Animated Background Elements - decorative only */}
+      <div
+        className={`absolute inset-0 bg-gradient-to-br from-green-400/10 via-emerald-400/10 to-teal-400/10 ${!prefersReducedMotion ? 'animate-pulse' : ''}`}
+        aria-hidden="true"
+      />
+      <div
+        className={`absolute top-10 right-10 w-20 h-20 bg-green-400/20 rounded-full blur-xl ${!prefersReducedMotion ? 'animate-bounce' : ''}`}
+        aria-hidden="true"
+      />
+      <div
+        className={`absolute bottom-20 left-10 w-16 h-16 bg-teal-400/20 rounded-full blur-lg ${!prefersReducedMotion ? 'animate-pulse' : ''}`}
+        aria-hidden="true"
+      />
+
       <div className="relative z-10 max-w-md mx-auto space-y-4">
         {/* Enhanced Header */}
-        <div className="flex items-center justify-between animate-slide-down">
-          <Button variant="ghost" size="icon" onClick={onBack} className="hover:bg-white/50 hover:backdrop-blur-sm hover:scale-110 transition-all">
+        <header className={`flex items-center justify-between ${!prefersReducedMotion ? 'animate-slide-down' : ''}`}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onBack}
+            className={cn("hover:bg-white/50 hover:backdrop-blur-sm transition-all", focusVisibleClasses)}
+            aria-label="Go back to previous page"
+          >
             <ArrowLeft className="w-5 h-5" />
+            <VisuallyHidden>Back</VisuallyHidden>
           </Button>
           <div className="flex items-center space-x-2 p-2 rounded-xl bg-white/70 backdrop-blur-sm shadow-lg">
-            <div className="relative">
-              <Leaf className="w-6 h-6 text-green-600 animate-pulse" />
-              <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-400 rounded-full animate-ping" />
-            </div>
+            <AccessibleIcon label="GreenCredit application logo" decorative>
+              <div className="relative">
+                <Leaf className={`w-6 h-6 text-green-600 ${!prefersReducedMotion ? 'animate-pulse' : ''}`} />
+                <div className={`absolute -top-1 -right-1 w-3 h-3 bg-green-400 rounded-full ${!prefersReducedMotion ? 'animate-ping' : ''}`} />
+              </div>
+            </AccessibleIcon>
             <span className="text-lg font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">GreenCredit</span>
           </div>
           <div className="w-10" />
-        </div>
+        </header>
+
+        {/* Main Content */}
+        <main id="main-content" className="space-y-4"
+              role="main"
+              aria-label="SME Dashboard"
+        >
 
         {/* Enhanced Welcome */}
         <div className="text-center space-y-3 animate-fade-in p-4 rounded-2xl bg-white/60 backdrop-blur-sm shadow-lg border border-white/50">
@@ -233,60 +384,82 @@ export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepaym
         </div>
 
         {/* Enhanced GreenScore Card */}
-        <Card className={`relative overflow-hidden border-2 ${user.greenScore >= 70 ? 'border-green-300' : 'border-yellow-300'} bg-gradient-to-br from-white/80 to-white/60 backdrop-blur-sm shadow-xl hover:shadow-2xl transition-all duration-300 hover:scale-105 animate-fade-in`} style={{ animationDelay: '0.2s' }}>
-          {/* Glowing Effect */}
-          <div className={`absolute inset-0 bg-gradient-to-br ${user.greenScore >= 70 ? 'from-green-400/20 to-emerald-400/20' : 'from-yellow-400/20 to-orange-400/20'} blur-sm`} />
+        <section aria-labelledby="greenscore-title">
+          <Card className={`relative overflow-hidden border-2 ${user.greenScore >= 70 ? 'border-green-300' : 'border-yellow-300'} bg-gradient-to-br from-white/80 to-white/60 backdrop-blur-sm shadow-xl hover:shadow-2xl transition-all duration-300 ${!prefersReducedMotion ? 'hover:scale-105 animate-fade-in' : ''}`} style={{ animationDelay: '0.2s' }}>
+            {/* Glowing Effect */}
+            <div className={`absolute inset-0 bg-gradient-to-br ${user.greenScore >= 70 ? 'from-green-400/20 to-emerald-400/20' : 'from-yellow-400/20 to-orange-400/20'} blur-sm`} aria-hidden="true" />
           
           <CardContent className="relative pt-6">
             <div className="text-center space-y-4">
-              <div className="relative w-36 h-36 mx-auto">
-                {/* Glowing Ring */}
-                <div className={`absolute inset-0 rounded-full bg-gradient-to-r ${user.greenScore >= 70 ? 'from-green-400 to-emerald-400' : 'from-yellow-400 to-orange-400'} blur-md opacity-30 animate-pulse`} />
-                
-                {/* Score Circle with Animation */}
-                <div className="relative w-full h-full">
-                  <svg className="transform -rotate-90 w-36 h-36">
-                    <circle
-                      cx="72"
-                      cy="72"
-                      r="64"
-                      stroke="currentColor"
-                      strokeWidth="6"
-                      fill="none"
-                      className="text-gray-200"
-                    />
-                    <circle
-                      cx="72"
-                      cy="72"
-                      r="64"
-                      stroke="url(#gradient)"
-                      strokeWidth="6"
-                      fill="none"
-                      strokeDasharray={`${2 * Math.PI * 64}`}
-                      strokeDashoffset={`${2 * Math.PI * 64 * (1 - user.greenScore / 100)}`}
-                      strokeLinecap="round"
-                      className="transition-all duration-1000 ease-out"
-                    />
-                    <defs>
-                      <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                        <stop offset="0%" stopColor={user.greenScore >= 70 ? '#10B981' : '#F59E0B'} />
-                        <stop offset="100%" stopColor={user.greenScore >= 70 ? '#059669' : '#EAB308'} />
-                      </linearGradient>
-                    </defs>
-                  </svg>
-                  
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="text-center space-y-1">
-                      <div className={`text-4xl font-bold ${getScoreColor(user.greenScore)} animate-pulse`}>
-                        {user.greenScore}
+              <div className="space-y-4">
+                {/* Accessible Progress Ring */}
+                <div className="relative w-36 h-36 mx-auto">
+                  {/* Glowing Ring - decorative */}
+                  <div className={`absolute inset-0 rounded-full bg-gradient-to-r ${user.greenScore >= 70 ? 'from-green-400 to-emerald-400' : 'from-yellow-400 to-orange-400'} blur-md opacity-30 ${!prefersReducedMotion ? 'animate-pulse' : ''}`} aria-hidden="true" />
+
+                  {/* Score Circle with Animation */}
+                  <div className="relative w-full h-full">
+                    <svg
+                      className="transform -rotate-90 w-36 h-36"
+                      role="img"
+                      aria-labelledby="greenscore-title"
+                      aria-describedby="greenscore-description"
+                    >
+                      <title id="greenscore-title">GreenScore Progress</title>
+                      <desc id="greenscore-description">Your current sustainability score is {user.greenScore} out of 100</desc>
+                      <circle
+                        cx="72"
+                        cy="72"
+                        r="64"
+                        stroke="currentColor"
+                        strokeWidth="6"
+                        fill="none"
+                        className="text-gray-200"
+                      />
+                      <circle
+                        cx="72"
+                        cy="72"
+                        r="64"
+                        stroke="url(#gradient)"
+                        strokeWidth="6"
+                        fill="none"
+                        strokeDasharray={`${2 * Math.PI * 64}`}
+                        strokeDashoffset={`${2 * Math.PI * 64 * (1 - user.greenScore / 100)}`}
+                        strokeLinecap="round"
+                        className={`${!prefersReducedMotion ? 'transition-all duration-1000 ease-out' : ''}`}
+                      />
+                      <defs>
+                        <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                          <stop offset="0%" stopColor={user.greenScore >= 70 ? '#10B981' : '#F59E0B'} />
+                          <stop offset="100%" stopColor={user.greenScore >= 70 ? '#059669' : '#EAB308'} />
+                        </linearGradient>
+                      </defs>
+                    </svg>
+
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="text-center space-y-1">
+                        <div className={`text-4xl font-bold ${getScoreColor(user.greenScore)} ${!prefersReducedMotion ? 'animate-pulse' : ''}`}>
+                          {user.greenScore}
+                        </div>
+                        <div className="text-xs text-gray-600 font-medium">GreenScore</div>
+                        {user.greenScore >= 70 && (
+                          <AccessibleIcon label="Excellent score achievement" decorative>
+                            <Star className={`w-4 h-4 mx-auto text-yellow-500 ${!prefersReducedMotion ? 'animate-bounce' : ''}`} />
+                          </AccessibleIcon>
+                        )}
                       </div>
-                      <div className="text-xs text-gray-600 font-medium">GreenScore</div>
-                      {user.greenScore >= 70 && (
-                        <Star className="w-4 h-4 mx-auto text-yellow-500 animate-bounce" />
-                      )}
                     </div>
                   </div>
                 </div>
+
+                {/* Screen reader friendly progress */}
+                <VisuallyHidden>
+                  <AccessibleProgress
+                    value={user.greenScore}
+                    max={100}
+                    label="Your GreenScore sustainability rating"
+                  />
+                </VisuallyHidden>
               </div>
               
               <div className="space-y-3">
@@ -359,11 +532,20 @@ export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepaym
         </div>
 
         {/* Enhanced Quick Actions */}
-        <div className="grid grid-cols-2 gap-4 animate-slide-up" style={{ animationDelay: '0.6s' }}>
-          <Button 
-            onClick={onUploadEvidence}
-            className="group relative h-24 bg-gradient-to-br from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-bold rounded-2xl shadow-xl hover:shadow-2xl transform hover:scale-105 hover:-rotate-1 transition-all duration-300 overflow-hidden"
-          >
+        <section aria-labelledby="quick-actions-title">
+          <VisuallyHidden>
+            <h2 id="quick-actions-title">Quick Actions</h2>
+          </VisuallyHidden>
+          <div className={`grid grid-cols-2 gap-4 ${!prefersReducedMotion ? 'animate-slide-up' : ''}`} style={{ animationDelay: '0.6s' }}>
+            <Button
+              onClick={onUploadEvidence}
+              className={cn(
+                "group relative h-24 bg-gradient-to-br from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-bold rounded-2xl shadow-xl hover:shadow-2xl transition-all duration-300 overflow-hidden",
+                !prefersReducedMotion && "transform hover:scale-105 hover:-rotate-1",
+                focusVisibleClasses
+              )}
+              aria-label="Upload sustainability evidence to boost your GreenScore"
+            >
             {/* Animated Background */}
             <div className="absolute inset-0 bg-gradient-to-r from-white/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
             <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
@@ -467,7 +649,7 @@ export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepaym
           <div className="absolute top-2 right-2">
             <Gift className="w-6 h-6 text-yellow-500 animate-bounce" />
           </div>
-          
+
           <CardHeader className="pb-3">
             <CardTitle className="text-base text-yellow-800 flex items-center space-x-2 font-bold">
               <div className="p-2 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-xl">
@@ -475,30 +657,37 @@ export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepaym
               </div>
               <span>Boost Your Score</span>
               <Sparkles className="w-4 h-4 text-yellow-600 animate-pulse" />
+              {loadingRecommendations && <Spinner size="sm" />}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {improvementTips.slice(0, 2).map((tip, index) => (
-              <div key={index} className="group p-3 bg-white/60 backdrop-blur-sm rounded-xl border border-white/50 hover:bg-white/80 hover:scale-105 transition-all duration-200">
-                <div className="flex justify-between items-center">
-                  <div className="space-y-1">
-                    <div className="text-sm font-bold text-gray-800 group-hover:text-yellow-800 transition-colors">{tip.action}</div>
-                    <div className="text-xs text-gray-600">{tip.description}</div>
-                  </div>
-                  <div className="flex flex-col items-center space-y-1">
-                    <Badge className="bg-gradient-to-r from-green-500 to-emerald-600 text-white border-0 font-bold text-xs px-3 py-1 shadow-lg animate-pulse">
-                      {tip.points}
-                    </Badge>
-                    <Star className="w-3 h-3 text-yellow-500" />
+            <LoadingOverlay isLoading={loadingRecommendations} message="Loading personalized recommendations...">
+              {improvementTips.slice(0, 2).map((tip, index) => (
+                <div key={index} className="group p-3 bg-white/60 backdrop-blur-sm rounded-xl border border-white/50 hover:bg-white/80 hover:scale-105 transition-all duration-200">
+                  <div className="flex justify-between items-center">
+                    <div className="space-y-1">
+                      <div className="text-sm font-bold text-gray-800 group-hover:text-yellow-800 transition-colors">{tip.action}</div>
+                      <div className="text-xs text-gray-600">{tip.description}</div>
+                    </div>
+                    <div className="flex flex-col items-center space-y-1">
+                      <Badge className="bg-gradient-to-r from-green-500 to-emerald-600 text-white border-0 font-bold text-xs px-3 py-1 shadow-lg animate-pulse">
+                        {tip.points}
+                      </Badge>
+                      <Star className="w-3 h-3 text-yellow-500" />
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
-            <Button className="w-full text-sm bg-gradient-to-r from-yellow-500 to-orange-600 hover:from-yellow-600 hover:to-orange-700 text-white font-bold py-3 rounded-xl shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200">
+              ))}
+            </LoadingOverlay>
+            <LoadingButton
+              loading={loadingRecommendations}
+              className="w-full text-sm bg-gradient-to-r from-yellow-500 to-orange-600 hover:from-yellow-600 hover:to-orange-700 text-white font-bold py-3 rounded-xl shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200"
+              onClick={() => fetchRecommendations()}
+            >
               <Target className="w-4 h-4 mr-2" />
               View All Tips
               <Sparkles className="w-4 h-4 ml-2 animate-pulse" />
-            </Button>
+            </LoadingButton>
           </CardContent>
         </Card>
 

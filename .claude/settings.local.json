@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(find:*)",
+      "Bash(dir \"C:\\Users\\USER\\Desktop\\SCHOOL PROJECTS\\HaliCred\\backend\\app\\ai\")",
+      "Bash(dir \"C:\\Users\\USER\\Desktop\\SCHOOL PROJECTS\\HaliCred\\backend\\app\\api\")",
+      "Read(//c/Users/USER/Desktop/**)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

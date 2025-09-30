@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import type { LucideIcon } from 'lucide-react';
 import { ArrowLeft, Camera, Upload, Leaf, Lightbulb, Droplets, Sun, Zap, Sparkles, Trophy, Target, Gift, Star, CheckCircle } from 'lucide-react';
 import { ai } from '../../lib/api';
+import { UploadProgress, LoadingButton } from '../Ui/loading';
 
 export type EvidenceUploadResult = {
   type: string;
@@ -40,6 +41,8 @@ export function EvidenceUpload({ businessType, onEvidenceUploaded, onBack }: Evi
   const [cost, setCost] = useState('');
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStatus, setUploadStatus] = useState<'uploading' | 'processing' | 'completed' | 'error'>('uploading');
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [processingMeta, setProcessingMeta] = useState<{ greenscore?: number | null; confidence?: number | null; requestId?: string } | null>(null);
@@ -103,10 +106,23 @@ export function EvidenceUpload({ businessType, onEvidenceUploaded, onBack }: Evi
     setIsUploading(true);
     setError(null);
     setSuccessMessage(null);
+    setUploadProgress(0);
+    setUploadStatus('uploading');
 
     const selectedAction = ecoActions.find(action => action.value === selectedType);
 
     try {
+      // Simulate upload progress
+      const progressInterval = setInterval(() => {
+        setUploadProgress(prev => {
+          if (prev >= 95) {
+            clearInterval(progressInterval);
+            return 95;
+          }
+          return prev + Math.random() * 10;
+        });
+      }, 200);
+
       const response = await ai.processEvidence({
         file: uploadedFile,
         sector: resolveBackendSector(businessType),
@@ -114,6 +130,14 @@ export function EvidenceUpload({ businessType, onEvidenceUploaded, onBack }: Evi
         evidence_type: selectedType,
         description,
       });
+
+      clearInterval(progressInterval);
+      setUploadProgress(100);
+      setUploadStatus('processing');
+
+      // Simulate processing delay
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      setUploadStatus('completed');
 
       setProcessingMeta({
         greenscore: response?.greenscore ?? null,
@@ -136,12 +160,17 @@ export function EvidenceUpload({ businessType, onEvidenceUploaded, onBack }: Evi
         requestId: response?.request_id,
       });
 
-      setSelectedType('');
-      setDescription('');
-      setCost('');
-      setUploadedFile(null);
+      // Reset form after success
+      setTimeout(() => {
+        setSelectedType('');
+        setDescription('');
+        setCost('');
+        setUploadedFile(null);
+        setUploadProgress(0);
+      }, 2000);
     } catch (submissionError) {
       console.error('Evidence upload failed:', submissionError);
+      setUploadStatus('error');
       const fallbackMessage =
         submissionError instanceof Error ? submissionError.message : 'Evidence upload failed. Please try again.';
       setError(fallbackMessage);
@@ -176,7 +205,22 @@ export function EvidenceUpload({ businessType, onEvidenceUploaded, onBack }: Evi
           <div className="w-10" />
         </div>
 
-        {(error || successMessage) && (
+        {/* Upload Progress */}
+        {isUploading && uploadedFile && (
+          <UploadProgress
+            progress={uploadProgress}
+            fileName={uploadedFile.name}
+            status={uploadStatus}
+            message={
+              uploadStatus === 'uploading' ? 'Uploading evidence...' :
+              uploadStatus === 'processing' ? 'AI analyzing evidence...' :
+              uploadStatus === 'completed' ? 'Processing complete!' :
+              'Upload failed'
+            }
+          />
+        )}
+
+        {(error || successMessage) && !isUploading && (
           <div
             className={`p-4 rounded-2xl border-2 backdrop-blur-sm shadow-lg animate-fade-in ${
               error
@@ -431,36 +475,27 @@ export function EvidenceUpload({ businessType, onEvidenceUploaded, onBack }: Evi
 
         {/* Enhanced Submit Button */}
         <div className="space-y-4 animate-slide-up" style={{ animationDelay: '0.8s' }}>
-          <Button 
+          <LoadingButton
+            loading={isUploading}
+            loadingText="AI is analyzing your evidence..."
             onClick={handleSubmit}
-            disabled={!canSubmit || isUploading}
+            disabled={!canSubmit}
             className={`w-full h-16 text-lg font-bold rounded-2xl shadow-2xl transition-all duration-300 ${
               canSubmit && !isUploading
                 ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white transform hover:scale-105 hover:rotate-1 animate-pulse'
                 : 'bg-gray-300 text-gray-500 cursor-not-allowed'
             }`}
           >
-            {isUploading ? (
-              <div className="flex items-center space-x-3">
-                <div className="relative">
-                  <div className="w-6 h-6 border-3 border-white border-t-transparent rounded-full animate-spin" />
-                  <div className="absolute inset-1 border-2 border-transparent border-t-white/50 rounded-full animate-spin" style={{ animationDirection: 'reverse', animationDuration: '0.5s' }} />
-                </div>
-                <span>AI is analyzing your evidence...</span>
-                <Sparkles className="w-5 h-5 animate-bounce" />
+            <div className="flex items-center space-x-3">
+              <Trophy className="w-6 h-6 animate-bounce" />
+              <span>Submit & Earn Points!</span>
+              <div className="flex space-x-1">
+                <Star className="w-4 h-4 text-yellow-300 animate-pulse" />
+                <Star className="w-4 h-4 text-yellow-300 animate-pulse" style={{ animationDelay: '0.2s' }} />
+                <Star className="w-4 h-4 text-yellow-300 animate-pulse" style={{ animationDelay: '0.4s' }} />
               </div>
-            ) : (
-              <div className="flex items-center space-x-3">
-                <Trophy className="w-6 h-6 animate-bounce" />
-                <span>Submit & Earn Points!</span>
-                <div className="flex space-x-1">
-                  <Star className="w-4 h-4 text-yellow-300 animate-pulse" />
-                  <Star className="w-4 h-4 text-yellow-300 animate-pulse" style={{ animationDelay: '0.2s' }} />
-                  <Star className="w-4 h-4 text-yellow-300 animate-pulse" style={{ animationDelay: '0.4s' }} />
-                </div>
-              </div>
-            )}
-          </Button>
+            </div>
+          </LoadingButton>
 
           {/* Enhanced Footer */}
           <div className="text-center space-y-3">

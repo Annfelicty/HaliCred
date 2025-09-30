@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { loans } from '../../lib/api';
 import { SMEUser } from '../SMEApp';
 import { ArrowLeft, DollarSign, TrendingDown, Clock, CheckCircle, Calculator, AlertCircle } from 'lucide-react';
+import { PageLoadingSkeleton, ErrorState, LoadingButton, Spinner } from '../Ui/loading';
 
 interface LoanQuoteOption {
   tenor: number;
@@ -57,9 +58,10 @@ export function LoanOffers({ user, onBack, onApplyForLoan }: LoanOffersProps) {
   const [selectedTerm, setSelectedTerm] = useState<string>('12');
   const [loanPurpose, setLoanPurpose] = useState<string>('');
   const [quoteOptions, setQuoteOptions] = useState<LoanQuoteOption[]>([]);
-  const [loadingQuotes, setLoadingQuotes] = useState<boolean>(false);
+  const [loadingQuotes, setLoadingQuotes] = useState<boolean>(true);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const [initialLoad, setInitialLoad] = useState<boolean>(true);
 
   useEffect(() => {
     let isMounted = true;
@@ -91,6 +93,7 @@ export function LoanOffers({ user, onBack, onApplyForLoan }: LoanOffersProps) {
       } finally {
         if (isMounted) {
           setLoadingQuotes(false);
+          setInitialLoad(false);
         }
       }
     };
@@ -162,6 +165,49 @@ export function LoanOffers({ user, onBack, onApplyForLoan }: LoanOffersProps) {
     }
   };
 
+  // Show loading skeleton on initial load
+  if (initialLoad) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-green-50 to-teal-50 p-4">
+        <div className="max-w-md mx-auto">
+          <PageLoadingSkeleton />
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state if critical data failed to load
+  if (quoteError && quoteOptions.length === 0 && !loadingQuotes) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-green-50 to-teal-50 p-4">
+        <div className="max-w-md mx-auto">
+          <div className="flex items-center justify-between mb-6">
+            <Button variant="ghost" size="icon" onClick={onBack}>
+              <ArrowLeft className="w-5 h-5" />
+            </Button>
+            <div className="flex items-center space-x-2">
+              <DollarSign className="w-6 h-6 text-green-600" />
+              <span className="text-lg font-medium text-green-800">Loan Offers</span>
+            </div>
+            <div className="w-10" />
+          </div>
+          <ErrorState
+            title="Unable to load loan offers"
+            description="We're having trouble loading loan offers for your selected amount and term."
+            action={{
+              label: "Try Again",
+              onClick: () => {
+                setQuoteError(null);
+                setLoadingQuotes(true);
+                setInitialLoad(true);
+              }
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-green-50 to-teal-50 p-4">
       <div className="max-w-md mx-auto space-y-4">
@@ -173,6 +219,7 @@ export function LoanOffers({ user, onBack, onApplyForLoan }: LoanOffersProps) {
           <div className="flex items-center space-x-2">
             <DollarSign className="w-6 h-6 text-green-600" />
             <span className="text-lg font-medium text-green-800">Loan Offers</span>
+            {loadingQuotes && <Spinner size="sm" />}
           </div>
           <div className="w-10" />
         </div>
@@ -353,13 +400,15 @@ export function LoanOffers({ user, onBack, onApplyForLoan }: LoanOffersProps) {
         </Card>
 
         {/* Apply Button */}
-        <Button
+        <LoadingButton
+          loading={submitting}
+          loadingText="Submitting application..."
           onClick={handleApply}
-          disabled={!loanPurpose || submitting || loadingQuotes}
+          disabled={!loanPurpose || loadingQuotes}
           className="w-full bg-green-600 hover:bg-green-700 h-12"
         >
-          {submitting ? 'Submitting...' : 'Apply for Loan'}
-        </Button>
+          Apply for Loan
+        </LoadingButton>
 
         <div className="text-center">
           <p className="text-xs text-gray-500">

@@ -10,21 +10,18 @@ import boto3
 import time
 import logging
 from fastapi import Depends, HTTPException
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import jwt
-from pathlib import Path
+from app.auth import get_current_user as auth_get_current_user
 from celery import Celery
 from typing import Dict, Any
+from sqlalchemy.orm import Session
+from app.db import get_db, SessionLocal
+from app.models import Evidence
 
 ai_service = None
 
-OTP_STORE = {}
-USERS = {}
-EVIDENCE = {}
-SCORES = {}
-LOANS = {}
+# Legacy in-memory storage (migrated to database)
+USERS = {}  # TODO: Remove after full migration to User model
 
-security = HTTPBearer(auto_error=False)
 
 # Logging setup
 logger = logging.getLogger(__name__)
@@ -60,33 +57,13 @@ def get_or_create_user(phone, full_name=None):
     USERS[user["id"]] = user
     return user
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if credentials is None or not credentials.credentials:
-        raise HTTPException(401, "Authentication credentials were not provided")
-
-    token = credentials.credentials
-    try:
-        # For development, use a simple token
-        if token == "dev-token":
-            return {"id": "dev-user-id", "roles": ["borrower"]}
-        
-        # In production, decode JWT
-        key_path = Path(os.environ.get("JWT_PUBLIC_KEY_PATH", "jwtRS256.key.pub"))
-        if key_path.exists():
-            public_key = key_path.read_text()
-            algorithms = ["RS256"]
-        else:
-            public_key = os.environ.get("JWT_SECRET_KEY", "dev-secret-key")
-            algorithms = [os.environ.get("JWT_ALGORITHM", "HS256")]
-        claims = jwt.decode(token, public_key, algorithms=algorithms, options={"verify_aud": False})
-        return USERS.get(claims["sub"], {"id": claims["sub"], "roles": claims.get("roles", [])})
-    except Exception:
-        raise HTTPException(401, "Invalid token")
-
 def require_role(role):
-    def checker(user=Depends(get_current_user)):
-        if role not in user.get("roles", []):
-            raise HTTPException(401, "Authentication required for this operation")
+    """Role-based access control using proper authentication."""
+    def checker(user=Depends(auth_get_current_user)):
+        # user is now a User model from app.auth.get_current_user
+        user_roles = user.roles or []
+        if role not in user_roles:
+            raise HTTPException(403, f"Role '{role}' required for this operation")
         return user
     return checker
 
@@ -137,14 +114,27 @@ def quote_rate(score: int, base_rate=0.20, discount_factor=0.25) -> float:
 def process_ocr(evidence_id: str) -> bool:
     """Process OCR for evidence using AI service."""
     try:
-        if ai_service and evidence_id in EVIDENCE:
-            evidence = EVIDENCE[evidence_id]
-            # Process the evidence
-            result = ai_service.analyze_receipt_ocr(evidence.get('s3_key', ''))
-            EVIDENCE[evidence_id]['status'] = 'verified'
-            EVIDENCE[evidence_id]['ocr_result'] = result
-            return True
-        return False
+        # Create database session for Celery task
+        db = SessionLocal()
+        try:
+            evidence = db.query(Evidence).filter(Evidence.id == evidence_id).first()
+            if not evidence:
+                logger.error(f"Evidence not found: {evidence_id}")
+                return False
+
+            if ai_service:
+                # Process the evidence
+                result = ai_service.analyze_receipt_ocr(evidence.s3_key)
+                # Update evidence status in database
+                evidence.status = 'verified'
+                # Note: OCR result would need to be stored in a new field or in Evidence model
+                db.commit()
+                return True
+            else:
+                logger.warning("AI service not available for OCR processing")
+                return False
+        finally:
+            db.close()
     except Exception as e:
         logger.error("OCR processing failed: %s", e)
         return False
@@ -152,12 +142,23 @@ def process_ocr(evidence_id: str) -> bool:
 def process_climate_practices(evidence_id: str) -> Dict:
     """Detect climate-smart practices from evidence."""
     try:
-        if ai_service and evidence_id in EVIDENCE:
-            evidence = EVIDENCE[evidence_id]
-            result = ai_service.detect_climate_smart_practices(evidence.get('s3_key', ''))
-            EVIDENCE[evidence_id]['climate_analysis'] = result
-            return result
-        return {"error": "Evidence not found"}
+        # Create database session for Celery task
+        db = SessionLocal()
+        try:
+            evidence = db.query(Evidence).filter(Evidence.id == evidence_id).first()
+            if not evidence:
+                logger.error(f"Evidence not found: {evidence_id}")
+                return {"error": "Evidence not found"}
+
+            if ai_service:
+                result = ai_service.detect_climate_smart_practices(evidence.s3_key)
+                # Note: Climate analysis result would need to be stored in a new field or in Evidence model
+                return result
+            else:
+                logger.warning("AI service not available for climate analysis")
+                return {"error": "AI service not available"}
+        finally:
+            db.close()
     except Exception as e:
         logger.error("Climate practices processing failed: %s", e, exc_info=True)
         return {"error": str(e)}

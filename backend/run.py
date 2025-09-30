@@ -4,6 +4,9 @@ Startup script for HaliScore backend.
 This script initializes the database and starts the FastAPI application.
 """
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import uvicorn
 import os
 import sys

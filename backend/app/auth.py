@@ -18,24 +18,10 @@ security = HTTPBearer(auto_error=False)
 
 
 def _decode_token(token: str) -> dict:
-    algorithm = settings.JWT_ALGORITHM.upper()
-    if algorithm.startswith("HS"):
-        return jwt.decode(
-            token,
-            settings.SECRET_KEY,
-            algorithms=[settings.JWT_ALGORITHM],
-            options={"verify_aud": False},
-        )
-
-    key_path = Path(settings.JWT_PUBLIC_KEY_PATH)
-    if key_path.exists():
-        public_key = key_path.read_text()
-    else:
-        # Development/testing fallback when key pair isn't provisioned
-        public_key = settings.SECRET_KEY
+    # Use HS256 with secret key for production simplicity
     return jwt.decode(
         token,
-        public_key,
+        settings.JWT_SECRET_KEY,
         algorithms=[settings.JWT_ALGORITHM],
         options={"verify_aud": False},
     )

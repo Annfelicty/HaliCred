@@ -14,9 +14,7 @@ class Settings:
         # Database
         self.DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://halicred_user:HaliCred2024!Secure@localhost:5432/halicred_db")
         
-        # JWT Authentication
-        self.JWT_PRIVATE_KEY_PATH = os.getenv("JWT_PRIVATE_KEY_PATH", "./keys/private_key.pem")
-        self.JWT_PUBLIC_KEY_PATH = os.getenv("JWT_PUBLIC_KEY_PATH", "./keys/public_key.pem")
+        # JWT Authentication (HS256 only for production simplicity)
         self.JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
         self.JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "24"))
         self.JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "Vsj5Sz3fIzHXyLd1uTebrvtPnWRGC_4V_kV_DhRVsr3nH8mU0A5o96xGU4Iqa7XbfmkIRpVr2EGSOAN4G9dW2g")

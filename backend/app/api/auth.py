@@ -7,12 +7,14 @@ and JWT token management.
 
 import base64
 import hashlib
+import json
 import random
 import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
+import redis
 from fastapi import APIRouter, Depends, HTTPException, status
 from jose import jwt
 from sqlalchemy.orm import Session
@@ -24,7 +26,22 @@ from app.schemas import OTPSendResponse, OTPRequestSchema, VerifySchema, Passwor
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
-# In-memory OTP store (replace with Redis in production)
+# Redis connection for OTP storage
+try:
+    redis_client = redis.Redis.from_url(
+        settings.CELERY_BROKER_URL,
+        decode_responses=True,
+        socket_connect_timeout=5,
+        socket_timeout=5
+    )
+    # Test connection
+    redis_client.ping()
+    print("SUCCESS: Redis connection established for OTP storage")
+except Exception as e:
+    print(f"WARNING: Redis connection failed, falling back to in-memory OTP storage: {e}")
+    redis_client = None
+
+# Fallback in-memory OTP store for development
 OTP_STORE: Dict[str, Dict[str, Any]] = {}
 
 PASSWORD_ALGORITHM = "pbkdf2_sha256"
@@ -46,6 +63,86 @@ def _contact_key(phone: str | None, email: str | None) -> Tuple[str, str]:
     if phone:
         return phone, "phone"
     return email, "email"  # type: ignore
+
+
+def _store_otp(identifier: str, otp_hash: str, expires_at: datetime) -> None:
+    """Store OTP in Redis or fallback to memory."""
+    otp_data = {
+        "hash": otp_hash,
+        "expires_at": expires_at.isoformat()
+    }
+
+    if redis_client:
+        try:
+            # Store in Redis with TTL
+            ttl_seconds = int((expires_at - _now()).total_seconds())
+            redis_key = f"otp:{identifier}"
+            redis_client.setex(redis_key, ttl_seconds, json.dumps(otp_data))
+        except Exception as e:
+            print(f"WARNING: Redis OTP storage failed, using memory fallback: {e}")
+            OTP_STORE[identifier] = {"hash": otp_hash, "expires_at": expires_at}
+    else:
+        OTP_STORE[identifier] = {"hash": otp_hash, "expires_at": expires_at}
+
+
+def _get_otp(identifier: str) -> Dict[str, Any] | None:
+    """Retrieve OTP from Redis or fallback to memory."""
+    if redis_client:
+        try:
+            redis_key = f"otp:{identifier}"
+            otp_data = redis_client.get(redis_key)
+            if otp_data:
+                data = json.loads(otp_data)
+                # Convert ISO format back to datetime
+                data["expires_at"] = datetime.fromisoformat(data["expires_at"])
+                return data
+            return None
+        except Exception as e:
+            print(f"WARNING: Redis OTP retrieval failed, using memory fallback: {e}")
+            return OTP_STORE.get(identifier)
+    else:
+        return OTP_STORE.get(identifier)
+
+
+def _delete_otp(identifier: str) -> None:
+    """Delete OTP from Redis or fallback to memory."""
+    if redis_client:
+        try:
+            redis_key = f"otp:{identifier}"
+            redis_client.delete(redis_key)
+        except Exception as e:
+            print(f"WARNING: Redis OTP deletion failed, using memory fallback: {e}")
+            OTP_STORE.pop(identifier, None)
+    else:
+        OTP_STORE.pop(identifier, None)
+
+
+def _check_rate_limit(identifier: str) -> None:
+    """Check and enforce rate limiting: 3 requests per 10 minutes per identifier."""
+    rate_limit_window = 10 * 60  # 10 minutes in seconds
+    max_requests = 3
+
+    if redis_client:
+        try:
+            rate_key = f"otp_rate:{identifier}"
+            current_requests = redis_client.get(rate_key)
+
+            if current_requests is None:
+                # First request in the window
+                redis_client.setex(rate_key, rate_limit_window, "1")
+            else:
+                requests_count = int(current_requests)
+                if requests_count >= max_requests:
+                    raise HTTPException(
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                        detail="Too many OTP requests. Try again in 10 minutes."
+                    )
+                # Increment the counter
+                redis_client.incr(rate_key)
+        except redis.RedisError as e:
+            # If Redis fails, allow the request but log the error
+            print(f"WARNING: Rate limiting check failed, allowing request: {e}")
+    # Note: No memory-based rate limiting fallback for simplicity in development
 
 
 def _hash_password(password: str) -> str:
@@ -78,19 +175,8 @@ def _issue_token(user: User, now: datetime) -> Dict[str, Any]:
         "exp": int((now + timedelta(hours=settings.JWT_EXPIRY_HOURS)).timestamp()),
     }
 
-    algorithm = settings.JWT_ALGORITHM.upper()
-    if algorithm.startswith("HS"):
-        signing_key = settings.SECRET_KEY
-    else:
-        private_key = getattr(settings, "JWT_PRIVATE_KEY", None)
-        if not private_key:
-            key_path = Path(settings.JWT_PRIVATE_KEY_PATH)
-            if key_path.exists():
-                private_key = key_path.read_text()
-                setattr(settings, "JWT_PRIVATE_KEY", private_key)
-            else:
-                raise RuntimeError("JWT private key not configured for RS algorithm")
-        signing_key = private_key
+    # Use HS256 with secret key for production simplicity
+    signing_key = settings.JWT_SECRET_KEY
 
     token = jwt.encode(claims, signing_key, algorithm=settings.JWT_ALGORITHM)
 
@@ -129,6 +215,9 @@ async def send_otp(payload: OTPRequestSchema) -> OTPSendResponse:
     try:
         identifier, contact_type = _contact_key(payload.phone, payload.email)
 
+        # Check rate limiting (3 requests per 10 minutes)
+        _check_rate_limit(identifier)
+
         # Generate 6-digit OTP (deterministic in development for testing)
         if settings.ENVIRONMENT.lower() in {"development", "testing", "dev"}:
             code = "123456"
@@ -137,8 +226,8 @@ async def send_otp(payload: OTPRequestSchema) -> OTPSendResponse:
         hashed = hashlib.sha256(code.encode()).hexdigest()
         expires_at = _now() + timedelta(minutes=5)
 
-        # Store OTP (in production, use Redis)
-        OTP_STORE[identifier] = {"hash": hashed, "expires_at": expires_at}
+        # Store OTP in Redis with TTL
+        _store_otp(identifier, hashed, expires_at)
 
         # In production, integrate with SMS/email service here
         print(f"OTP for {contact_type} {identifier}: {code}")
@@ -177,7 +266,7 @@ async def verify_otp(payload: VerifySchema, db: Session = Depends(get_db)):
         identifier, contact_type = _contact_key(payload.phone, payload.email)
         code = payload.code
 
-        stored = OTP_STORE.get(identifier)
+        stored = _get_otp(identifier)
         if not stored:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -188,7 +277,7 @@ async def verify_otp(payload: VerifySchema, db: Session = Depends(get_db)):
         expires_at = stored["expires_at"]
 
         if _now() > expires_at:
-            del OTP_STORE[identifier]
+            _delete_otp(identifier)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="OTP has expired"
@@ -204,7 +293,7 @@ async def verify_otp(payload: VerifySchema, db: Session = Depends(get_db)):
                     detail="Invalid OTP code"
                 )
 
-        del OTP_STORE[identifier]
+        _delete_otp(identifier)
 
         query_filter = User.email == identifier if contact_type == "email" else User.phone == identifier
         user = db.query(User).filter(query_filter).first()
