@@ -5,7 +5,7 @@ import { Progress } from '../Ui/progress';
 import { SMEUser } from '../SMEApp';
 import { useGreenScore } from '../../hooks/useGreenScore';
 import { useEffect, useState } from 'react';
-import { ai } from '../../lib/api';
+import { cn } from '../../lib/utils';
 import { Spinner, LoadingOverlay, DashboardSkeleton, ErrorState, LoadingButton } from '../Ui/loading';
 import {
   SkipLink,
@@ -146,7 +146,7 @@ interface SMEDashboardProps {
 }
 
 export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepayments, onBack }: SMEDashboardProps) {
-  const { greenScore, loading: scoreLoading, error: scoreError, fetchCurrentScore } = useGreenScore();
+  const { greenScore, error: scoreError, fetchCurrentScore } = useGreenScore();
   const [recommendations, setRecommendations] = useState<any[]>([]);
   const [loadingRecommendations, setLoadingRecommendations] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -483,6 +483,7 @@ export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepaym
             </div>
           </CardContent>
         </Card>
+      </section>
 
         {/* Enhanced Category Tiles */}
         <div className="grid grid-cols-2 gap-3 animate-slide-up" style={{ animationDelay: '0.4s' }}>
@@ -642,6 +643,7 @@ export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepaym
             </CardContent>
           </Card>
         )}
+      </section>
 
         {/* Enhanced Improvement Tips */}
         <Card className="relative overflow-hidden bg-gradient-to-br from-yellow-50/80 to-orange-50/80 backdrop-blur-sm border-2 border-yellow-200 shadow-xl animate-slide-up" style={{ animationDelay: '0.8s' }}>
@@ -712,46 +714,50 @@ export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepaym
             </CardContent>
           </Card>
         )}
-      </div>
-      
-      {/* Custom CSS Animations */}
+
+      </main>
+
+      {/* Custom CSS Animations  */}
       <style>{`
         @keyframes fade-in {
           from { opacity: 0; transform: translateY(20px); }
           to { opacity: 1; transform: translateY(0); }
         }
-        
+
         @keyframes slide-up {
           from { opacity: 0; transform: translateY(30px); }
           to { opacity: 1; transform: translateY(0); }
         }
-        
+
         @keyframes slide-down {
           from { opacity: 0; transform: translateY(-20px); }
           to { opacity: 1; transform: translateY(0); }
         }
-        
+
         @keyframes shimmer {
           0% { transform: translateX(-100%); }
           100% { transform: translateX(100%); }
         }
-        
+
         .animate-fade-in {
           animation: fade-in 0.8s ease-out forwards;
         }
-        
+
         .animate-slide-up {
           animation: slide-up 0.8s ease-out forwards;
         }
-        
+
         .animate-slide-down {
           animation: slide-down 0.6s ease-out forwards;
         }
-        
+
         .animate-shimmer {
           animation: shimmer 2s infinite;
         }
       `}</style>
     </div>
+    </div>
   );
 }
+
+

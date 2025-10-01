@@ -1,7 +1,7 @@
-"""
-Health Check System for HaliCred
-Provides comprehensive health monitoring for all dependencies and services.
-"""
+
+# Health Check System for HaliCred
+# Provides comprehensive health monitoring for all dependencies and services.
+
 
 import asyncio
 import time
@@ -15,9 +15,9 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 import aiohttp
 
-from app.database import get_db
+from app.db import get_db  
 from app.config import settings
-from .logger import get_logger
+from .logger import get_logger  
 
 logger = get_logger(__name__)
 
@@ -284,6 +284,63 @@ class HealthChecker:
                 error=str(e)
             )
 
+    async def check_otp_delivery_services(self) -> HealthCheckResult:
+        """Check OTP delivery service configuration and health"""
+        start_time = time.time()
+        try:
+            from app.config import settings
+            from app.services.otp_service import otp_delivery_service
+
+            issues = []
+            status = HealthStatus.HEALTHY
+            details = {
+                "otp_mode": settings.OTP_MODE,
+                "environment_mode": settings.ENVIRONMENT_MODE
+            }
+
+            # Check if OTP_MODE is on (delivery enabled)
+            if settings.OTP_MODE.lower() == "on":
+                # Check Africa's Talking SMS
+                if otp_delivery_service.africas_talking_sms:
+                    details["africas_talking_status"] = "initialized"
+                    details["africas_talking_username"] = otp_delivery_service.africas_talking_username
+                    details["africas_talking_env"] = settings.ENVIRONMENT_MODE
+                else:
+                    issues.append("Africa's Talking SMS not initialized")
+                    status = HealthStatus.DEGRADED
+
+                # Check SMTP Email
+                if settings.SMTP_HOST and settings.SMTP_PASSWORD != "not_configured_yet":
+                    details["smtp_status"] = "configured"
+                    details["smtp_host"] = settings.SMTP_HOST
+                else:
+                    issues.append("SMTP email not configured")
+                    status = HealthStatus.DEGRADED
+            else:
+                details["delivery_mode"] = "terminal_only"
+                details["note"] = "OTP delivery disabled (OTP_MODE=off)"
+
+            response_time = (time.time() - start_time) * 1000
+
+            if issues:
+                details["issues"] = issues
+
+            return HealthCheckResult(
+                service="otp_delivery",
+                status=status,
+                response_time_ms=response_time,
+                details=details
+            )
+
+        except Exception as e:
+            response_time = (time.time() - start_time) * 1000
+            return HealthCheckResult(
+                service="otp_delivery",
+                status=HealthStatus.UNKNOWN,
+                response_time_ms=response_time,
+                error=str(e)
+            )
+
     async def run_all_checks(self, use_cache: bool = True) -> Dict[str, HealthCheckResult]:
         """Run all health checks"""
         results = {}
@@ -294,6 +351,7 @@ class HealthChecker:
             ("gemini_api", self.check_gemini_api),
             ("vision_api", self.check_vision_api),
             ("climatiq_api", self.check_climatiq_api),
+            ("otp_delivery", self.check_otp_delivery_services),
             ("application", self.check_application_health)
         ]
 

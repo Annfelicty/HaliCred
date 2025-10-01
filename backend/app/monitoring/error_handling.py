@@ -4,14 +4,13 @@ Provides consistent error responses, classification, and user-friendly messages.
 """
 
 import traceback
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 from enum import Enum
 from dataclasses import dataclass
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
-from starlette.exceptions import HTTPException as StarletteHTTPException
-
 from .logger import get_logger, get_correlation_id
 
 logger = get_logger(__name__)
@@ -313,80 +312,119 @@ class ErrorHandler:
         return self.create_error_response("SYS_001")
 
 
+
+
+
+    # Exception handlers for FastAPI
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        """Handle validation exceptions"""
+        error = error_handler.handle_validation_error(exc)
+        error_handler.log_error(error, exc, request)
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content=error_handler.format_error_response(error)
+        )
+
+
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        """Handle HTTP exceptions"""
+        error = error_handler.handle_http_exception(exc)
+        error_handler.log_error(error, exc, request)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=error_handler.format_error_response(error)
+        )
+
+
+    async def generic_exception_handler(request: Request, exc: Exception):
+        """Handle generic exceptions"""
+        error = error_handler.handle_generic_exception(exc)
+        error_handler.log_error(error, exc, request)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=error_handler.format_error_response(error)
+        )
+
+
+    # Custom exception classes
+    class BusinessLogicError(Exception):
+        """Business logic error"""
+        def __init__(self, error_code: str, message: str = "", context: Dict[str, Any] = None):
+            self.error_code = error_code
+            self.message = message
+            self.context = context or {}
+            super().__init__(message)
+
+
+    class ExternalServiceError(Exception):
+        """External service error"""
+        def __init__(self, service: str, message: str = "", context: Dict[str, Any] = None):
+            self.service = service
+            self.message = message
+            self.context = context or {}
+            super().__init__(f"{service}: {message}")
+
+
+    class ValidationError(Exception):
+        """Validation error"""
+        def __init__(self, field: str, message: str = "", context: Dict[str, Any] = None):
+            self.field = field
+            self.message = message
+            self.context = context or {}
+            super().__init__(f"{field}: {message}")
+
+
+    # Utility functions
+    def raise_business_error(error_code: str, message: str = "", context: Dict[str, Any] = None):
+        """Raise a business logic error"""
+        raise BusinessLogicError(error_code, message, context)
+
+
+    def raise_validation_error(field: str, message: str = "", context: Dict[str, Any] = None):
+        """Raise a validation error"""
+        raise ValidationError(field, message, context)
+
+
+    def raise_external_service_error(service: str, message: str = "", context: Dict[str, Any] = None):
+        """Raise an external service error"""
+        raise ExternalServiceError(service, message, context)
+
+
 # Global error handler instance
 error_handler = ErrorHandler()
 
 
-# Exception handlers for FastAPI
+# Exception handlers (module level)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Handle validation exceptions"""
-    error = error_handler.handle_validation_error(exc)
-    error_handler.log_error(error, exc, request)
+    """Handle FastAPI validation errors"""
     return JSONResponse(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        content=error_handler.format_error_response(error)
+        status_code=422,
+        content={
+            "error": "Validation Error",
+            "details": exc.errors(),
+            "timestamp": datetime.utcnow().isoformat()
+        }
     )
 
 
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Handle HTTP exceptions"""
-    error = error_handler.handle_http_exception(exc)
-    error_handler.log_error(error, exc, request)
     return JSONResponse(
         status_code=exc.status_code,
-        content=error_handler.format_error_response(error)
+        content={
+            "error": exc.detail,
+            "timestamp": datetime.utcnow().isoformat()
+        }
     )
 
 
 async def generic_exception_handler(request: Request, exc: Exception):
     """Handle generic exceptions"""
-    error = error_handler.handle_generic_exception(exc)
-    error_handler.log_error(error, exc, request)
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
     return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content=error_handler.format_error_response(error)
+        status_code=500,
+        content={
+            "error": "Internal Server Error",
+            "timestamp": datetime.utcnow().isoformat()
+        }
     )
-
-
-# Custom exception classes
-class BusinessLogicError(Exception):
-    """Business logic error"""
-    def __init__(self, error_code: str, message: str = "", context: Dict[str, Any] = None):
-        self.error_code = error_code
-        self.message = message
-        self.context = context or {}
-        super().__init__(message)
-
-
-class ExternalServiceError(Exception):
-    """External service error"""
-    def __init__(self, service: str, message: str = "", context: Dict[str, Any] = None):
-        self.service = service
-        self.message = message
-        self.context = context or {}
-        super().__init__(f"{service}: {message}")
-
-
-class ValidationError(Exception):
-    """Validation error"""
-    def __init__(self, field: str, message: str = "", context: Dict[str, Any] = None):
-        self.field = field
-        self.message = message
-        self.context = context or {}
-        super().__init__(f"{field}: {message}")
-
-
-# Utility functions
-def raise_business_error(error_code: str, message: str = "", context: Dict[str, Any] = None):
-    """Raise a business logic error"""
-    raise BusinessLogicError(error_code, message, context)
-
-
-def raise_validation_error(field: str, message: str = "", context: Dict[str, Any] = None):
-    """Raise a validation error"""
-    raise ValidationError(field, message, context)
-
-
-def raise_external_service_error(service: str, message: str = "", context: Dict[str, Any] = None):
-    """Raise an external service error"""
-    raise ExternalServiceError(service, message, context)

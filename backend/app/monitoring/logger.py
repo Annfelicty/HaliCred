@@ -96,6 +96,9 @@ class StructuredLogger:
         **kwargs
     ):
         """Internal method to log with structured data"""
+        # Extract exc_info from kwargs as it's a reserved logging parameter
+        exc_info = kwargs.pop("exc_info", None)
+
         extra = {"extra_fields": extra_fields or {}}
         extra.update(kwargs)
 
@@ -105,7 +108,11 @@ class StructuredLogger:
             extra["correlation_id"] = correlation_id
 
         method = getattr(self.logger, level.lower())
-        method(message, extra=extra)
+        # Pass exc_info as a separate parameter, not in extra
+        if exc_info is not None:
+            method(message, exc_info=exc_info, extra=extra)
+        else:
+            method(message, extra=extra)
 
     def debug(self, message: str, **kwargs):
         """Log debug message"""

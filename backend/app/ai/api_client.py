@@ -65,42 +65,42 @@ class ExternalAPIClient:
 
     def _init_gemini(self):
         """Initialize Gemini AI client"""
-        logger.info(f"🔧 Initializing Gemini AI with model: gemini-pro")
+        logger.info(f"[INIT] Initializing Gemini AI with model: gemini-2.5-flash")
         if self.gemini_api_key:
             try:
                 genai.configure(api_key=self.gemini_api_key)
-                self.gemini_model = genai.GenerativeModel('gemini-2.5-flash')
-                logger.info("✅ Gemini AI client initialized successfully")
+                self.gemini_model = genai.GenerativeModel("models/gemini-2.5-flash")
+                logger.info("[OK] Gemini AI client initialized successfully")
             except Exception as e:
-                logger.error(f"❌ Failed to initialize Gemini AI: {e}")
+                logger.error(f"[ERROR] Failed to initialize Gemini AI: {e}")
                 # Try alternative model name
                 try:
-                    self.gemini_model = genai.GenerativeModel('gemini-pro')
-                    logger.info("✅ Gemini AI client initialized with alternative model")
+                    self.gemini_model = genai.GenerativeModel("models/gemini-1.5-flash")
+                    logger.info("[OK] Gemini AI client initialized with alternative model")
                 except Exception as e2:
-                    logger.error(f"❌ Failed to initialize Gemini AI with alternative model: {e2}")
+                    logger.error(f"[ERROR] Failed to initialize Gemini AI with alternative model: {e2}")
                     self.gemini_model = None
         else:
-            logger.warning("⚠️ Gemini API key not configured")
+            logger.warning("[WARN] Gemini API key not configured")
             self.gemini_model = None
 
     def _init_google_vision(self):
         """Initialize Google Vision client"""
-        logger.info(f"🔧 Initializing Google Vision client")
+        logger.info(f"[INIT] Initializing Google Vision client")
         try:
             credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-            logger.info(f"📁 Google Vision credentials path: {credentials_path}")
+            logger.info(f"[FILE] Google Vision credentials path: {credentials_path}")
             
             if credentials_path and os.path.exists(credentials_path):
-                logger.info(f"✅ Found credentials file: {credentials_path}")
+                logger.info(f"[OK] Found credentials file: {credentials_path}")
                 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
                 self.vision_client = vision.ImageAnnotatorClient()
-                logger.info("✅ Google Vision client initialized successfully")
+                logger.info("[OK] Google Vision client initialized successfully")
             else:
-                logger.warning(f"⚠️ Google Vision credentials file not found at: {credentials_path}")
+                logger.warning(f"[WARN] Google Vision credentials file not found at: {credentials_path}")
                 self.vision_client = None
         except Exception as e:
-            logger.error(f"❌ Failed to initialize Google Vision: {e}")
+            logger.error(f"[ERROR] Failed to initialize Google Vision: {e}")
             self.vision_client = None
 
     async def __aenter__(self):
@@ -154,9 +154,9 @@ class ExternalAPIClient:
         if breaker.failure_count >= self.config.circuit_breaker_threshold:
             breaker.state = CircuitState.OPEN
             breaker.next_attempt_time = time.time() + self.config.circuit_breaker_timeout
-            logger.warning(f"⚠ {service_name} circuit breaker OPENED after {breaker.failure_count} failures")
+            logger.warning(f"[WARN] {service_name} circuit breaker OPENED after {breaker.failure_count} failures")
 
-        logger.error(f"✗ {service_name} API call failed: {error}")
+        logger.error(f"[FAIL] {service_name} API call failed: {error}")
 
     async def _retry_with_backoff(self, func: Callable, service_name: str, *args, **kwargs) -> Any:
         """Execute function with exponential backoff retry logic"""
@@ -185,7 +185,7 @@ class ExternalAPIClient:
                     self.config.retry_max_delay
                 )
 
-                logger.warning(f"⚠ {service_name} attempt {attempt + 1} failed, retrying in {delay}s: {e}")
+                logger.warning(f"[WARN] {service_name} attempt {attempt + 1} failed, retrying in {delay}s: {e}")
                 await asyncio.sleep(delay)
 
         raise last_exception
@@ -195,18 +195,18 @@ class ExternalAPIClient:
         results = {}
 
         # Test Gemini API
-        logger.info("🔍 Testing Gemini API...")
+        logger.info("[TEST] Testing Gemini API...")
         try:
             if self.gemini_model:
-                logger.info("✅ Gemini model exists, running test...")
+                logger.info("[OK] Gemini model exists, running test...")
                 await self._retry_with_backoff(self._test_gemini_connection, "gemini")
                 results["gemini"] = True
-                logger.info("✅ Gemini API validation successful")
+                logger.info("[OK] Gemini API validation successful")
             else:
-                logger.warning("⚠️ Gemini model not initialized")
+                logger.warning("[WARN] Gemini model not initialized")
                 results["gemini"] = False
         except Exception as e:
-            logger.error(f"❌ Gemini credential validation failed: {e}")
+            logger.error(f"[ERROR] Gemini credential validation failed: {e}")
             results["gemini"] = False
 
         # Test Google Vision API
@@ -216,10 +216,10 @@ class ExternalAPIClient:
                     self._test_vision_connection, "google_vision"
                 )
                 results["google_vision"] = True
-                logger.info("✅ Google Vision API validation successful")
+                logger.info("[OK] Google Vision API validation successful")
             else:
                 results["google_vision"] = False
-                logger.warning("⚠ Google Vision API validation failed: Vision client not initialized")
+                logger.warning("[WARN] Google Vision API validation failed: Vision client not initialized")
         except Exception as e:
             logger.error(f"Google Vision credential validation failed: {e}")
             results["google_vision"] = False
@@ -231,10 +231,10 @@ class ExternalAPIClient:
                     self._test_climatiq_connection, "climatiq"
                 )
                 results["climatiq"] = True
-                logger.info("✅ Climatiq API validation successful")
+                logger.info("[OK] Climatiq API validation successful")
             else:
                 results["climatiq"] = False
-                logger.warning("⚠ Climatiq API validation failed: API key not configured")
+                logger.warning("[WARN] Climatiq API validation failed: API key not configured")
         except Exception as e:
             logger.error(f"Climatiq credential validation failed: {e}")
             results["climatiq"] = False
@@ -243,6 +243,8 @@ class ExternalAPIClient:
 
     async def _test_gemini_connection(self):
         """Test Gemini API connectivity"""
+        start_time = time.time()
+
         if not self.gemini_model:
             raise Exception("Gemini model not initialized")
 
@@ -250,27 +252,31 @@ class ExternalAPIClient:
         if not response.text:
             raise Exception("Empty response from Gemini API")
 
-        logger.debug("✓ Gemini API connection test successful")
+        response_time = (time.time() - start_time) * 1000  # Convert to milliseconds
+        logger.info(f"[OK] Gemini API connection test successful - Model ready for inference ({response_time:.2f}ms)")
 
     async def _test_vision_connection(self):
         """Test Google Vision API connectivity"""
+        start_time = time.time()
+
         if not self.vision_client:
             raise Exception("Vision client not initialized")
 
         try:
             # Use the actual solar panel image file
             image_path = "sample-data/solar-panel.jpg"  # Path relative to backend folder
-            
+
             with open(image_path, 'rb') as image_file:
                 image_content = image_file.read()
-            
+
             test_image = vision.Image(content=image_content)
             response = self.vision_client.text_detection(image=test_image)
-            
+
             if response.error.message:
                 raise Exception(f"Vision API error: {response.error.message}")
-                
-            logger.info("✅ Google Vision API validation successful")
+
+            response_time = (time.time() - start_time) * 1000  # Convert to milliseconds
+            logger.info(f"[OK] Google Vision API validation successful - OCR ready ({response_time:.2f}ms)")
         except FileNotFoundError:
             raise Exception(f"Test image file not found: {image_path}")
         except Exception as e:
@@ -279,6 +285,8 @@ class ExternalAPIClient:
 
     async def _test_climatiq_connection(self):
         """Test Climatiq API connectivity"""
+        start_time = time.time()
+
         if not self.session:
             raise Exception("HTTP session not initialized")
 
@@ -301,7 +309,8 @@ class ExternalAPIClient:
                 error_text = await response.text()
                 raise Exception(f"Climatiq API error {response.status}: {error_text}")
 
-        logger.debug("✓ Climatiq API connection test successful")
+        response_time = (time.time() - start_time) * 1000  # Convert to milliseconds
+        logger.info(f"[OK] Climatiq API connection test successful - Emissions data accessible ({response_time:.2f}ms)")
 
     async def call_gemini_api(self, prompt: str, **kwargs) -> str:
         """Call Gemini API with retry logic"""

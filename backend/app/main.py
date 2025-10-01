@@ -57,7 +57,7 @@ from app.auth import get_current_user
 from app.monitoring import (
     setup_logging, get_logger,
     metrics_collector, health_checker,
-    correlation_id_middleware, metrics_middleware,
+    CorrelationIdMiddleware, MetricsMiddleware,
     SecurityHeadersMiddleware, RateLimitingMiddleware, InputValidationMiddleware,
     rate_limiter, security_config,
     validation_exception_handler, http_exception_handler, generic_exception_handler
@@ -95,8 +95,8 @@ app.add_middleware(RateLimitingMiddleware, rate_limiter=rate_limiter)
 app.add_middleware(InputValidationMiddleware, config=security_config)
 
 # Add monitoring middleware
-app = correlation_id_middleware(app)
-app = metrics_middleware(app)
+app.add_middleware(MetricsMiddleware)
+app.add_middleware(CorrelationIdMiddleware)
 
 # CORS Configuration (keep after security middleware)
 origins = os.getenv("BACKEND_CORS_ORIGINS", "http://localhost:3000,http://localhost:5173").split(",")
@@ -201,8 +201,8 @@ async def startup_event():
     try:
         from app.ai.startup_validation import validate_on_startup
 
-        logger.info("🚀 HaliScore Backend starting up...")
-        logger.info("🔧 Validating external API connectivity...")
+        logger.info("[START] HaliScore Backend starting up...")
+        logger.info("[INIT] Validating external API connectivity...")
 
         validation_results = await validate_on_startup()
 
@@ -210,11 +210,11 @@ async def startup_event():
         available_services = sum(1 for status in validation_results.values() if status)
         total_services = len(validation_results)
 
-        logger.info(f"✅ Startup complete! External APIs: {available_services}/{total_services} available")
+        logger.info(f"[OK] Startup complete! External APIs: {available_services}/{total_services} available")
 
     except Exception as e:
-        logger.error(f"⚠️ Startup validation encountered errors: {e}")
-        logger.info("🔄 Application will continue with fallback mechanisms")
+        logger.error(f"[WARN] Startup validation encountered errors: {e}")
+        logger.info("[INFO] Application will continue with fallback mechanisms")
 
 # Create routers for different functionalities
 profile_router = APIRouter()

@@ -8,6 +8,7 @@ and JWT token management.
 import base64
 import hashlib
 import json
+import logging
 import random
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,7 @@ from app.models import User
 from app.schemas import OTPSendResponse, OTPRequestSchema, VerifySchema, PasswordLoginSchema
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+logger = logging.getLogger(__name__)
 
 # Redis connection for OTP storage
 try:
@@ -229,9 +231,34 @@ async def send_otp(payload: OTPRequestSchema) -> OTPSendResponse:
         # Store OTP in Redis with TTL
         _store_otp(identifier, hashed, expires_at)
 
-        # In production, integrate with SMS/email service here
-        print(f"OTP for {contact_type} {identifier}: {code}")
-        
+        # Deliver OTP via configured method (Terminal/SMS/Email)
+        from app.services.otp_service import otp_delivery_service
+
+        try:
+            success, error = await otp_delivery_service.send_otp(
+                identifier=identifier,
+                contact_type=contact_type,
+                code=code
+            )
+
+            if not success:
+                logger.error(f"OTP delivery failed: {error}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to deliver OTP: {error}"
+                )
+
+            logger.info(f"✅ OTP delivered successfully to {contact_type}: {identifier}")
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"OTP delivery exception: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"OTP delivery failed: {str(e)}"
+            )
+
         return OTPSendResponse(
             status="sent",
             message="OTP sent successfully",

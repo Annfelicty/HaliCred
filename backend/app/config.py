@@ -37,18 +37,41 @@ class Settings:
         self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
         self.GOOGLE_VISION_API_KEY = os.getenv("GOOGLE_VISION_API_KEY", "")
         self.CLIMATIQ_API_KEY = os.getenv("CLIMATIQ_API_KEY", "")
-        
+
+        # OTP Delivery Configuration
+        self.OTP_MODE = os.getenv("OTP_MODE", "off")  # on = use SMS/Email, off = print to terminal
+        self.ENVIRONMENT_MODE = os.getenv("ENVIRONMENT_MODE", "development")  # development or production
+
+        # Africa's Talking SMS Configuration (for OTP)
+        # Development/Sandbox credentials
+        self.AFRICAS_TALKING_USERNAME_DEVELOPMENT = os.getenv("AFRICAS_TALKING_USERNAME_DEVELOPMENT", "sandbox")
+        self.AFRICAS_TALKING_API_KEY_DEVELOPMENT = os.getenv("AFRICAS_TALKING_API_KEY_DEVELOPMENT", "")
+        self.AFRICAS_TALKING_SENDER_ID_DEVELOPMENT = os.getenv("AFRICAS_TALKING_SENDER_ID_DEVELOPMENT", "AFRICASTKNG")
+
+        # Production credentials
+        self.AFRICAS_TALKING_USERNAME_PRODUCTION = os.getenv("AFRICAS_TALKING_USERNAME_PRODUCTION", "")
+        self.AFRICAS_TALKING_API_KEY_PRODUCTION = os.getenv("AFRICAS_TALKING_API_KEY_PRODUCTION", "")
+        self.AFRICAS_TALKING_SENDER_ID_PRODUCTION = os.getenv("AFRICAS_TALKING_SENDER_ID_PRODUCTION", "HALICRED")
+
+        # Email Configuration (for OTP)
+        self.SMTP_HOST = os.getenv("SMTP_HOST", "")
+        self.SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+        self.SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
+        self.SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+        self.SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "noreply@halicred.com")
+        self.SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "HaliCred Support")
+
         # API Settings
         self.API_V1_STR = "/api/v1"
         self.PROJECT_NAME = "HaliScore"
-        
+
         # CORS
         self.BACKEND_CORS_ORIGINS = ["*"]
-        
+
         # AI/ML Settings
         self.AI_MODEL_PATH: Optional[str] = None
         self.OCR_LANGUAGE = "eng"
-        
+
         # Environment
         self.ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
         self.DEBUG = os.getenv("DEBUG", "true").lower() == "true"

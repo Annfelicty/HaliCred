@@ -5,8 +5,13 @@ import { Label } from '../Ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../Ui/card';
 // import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../Ui/select';
 import { Checkbox } from '../Ui/checkbox';
+import { InputOTP, InputOTPGroup, InputOTPSlot, InputOTPSeparator } from '../Ui/input-otp';
+import { Alert, AlertDescription } from '../Ui/alert';
 import type { LucideIcon } from 'lucide-react';
-import { ArrowLeft, Leaf, Tractor, Scissors, Zap, Building, Sparkles, CheckCircle, Shield, Smartphone } from 'lucide-react';
+import { ArrowLeft, Leaf, Tractor, Scissors, Zap, Building, Sparkles, CheckCircle, Shield, Smartphone, Loader2, AlertCircle, Mail } from 'lucide-react';
+import axios from 'axios';
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 type BusinessType = 'farmer' | 'salon' | 'welding' | 'other';
 
@@ -35,6 +40,11 @@ export function SMEOnboarding({ onComplete, onBack }: SMEOnboardingProps) {
       receipts: false
     }
   });
+  const [otpCode, setOtpCode] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [countdown, setCountdown] = useState(0);
 
   const businessTypes: Array<{ value: BusinessType; label: string; icon: LucideIcon; description: string }> = [
     { value: 'farmer', label: 'Agriculture/Farming', icon: Tractor, description: 'Crops, livestock, agro-processing' },
@@ -43,20 +53,94 @@ export function SMEOnboarding({ onComplete, onBack }: SMEOnboardingProps) {
     { value: 'other', label: 'Other Business', icon: Building, description: 'General small business' }
   ];
 
-  const handleNext = () => {
+  // Countdown timer for OTP expiry
+  const startCountdown = () => {
+    setCountdown(300); // 5 minutes
+    const timer = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const handleSendOTP = async () => {
+    setError('');
+    setSuccess('');
+    setIsLoading(true);
+
+    try {
+      const response = await axios.post(`${API_BASE_URL}/auth/otp`, {
+        phone: formData.phone
+      });
+
+      setSuccess('OTP sent successfully to your phone');
+      startCountdown();
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to send OTP. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleVerifyOTP = async () => {
+    setError('');
+    setIsLoading(true);
+
+    try {
+      const response = await axios.post(`${API_BASE_URL}/auth/verify`, {
+        phone: formData.phone,
+        code: otpCode,
+        full_name: formData.name,
+        roles: ['borrower']
+      });
+
+      const { access_token } = response.data;
+
+      // Store the access token in localStorage for subsequent API calls
+      localStorage.setItem('access_token', access_token);
+
+      setSuccess('Verification successful!');
+
+      // Complete onboarding after successful OTP verification
+      setTimeout(() => {
+        if (!formData.businessType) {
+          return;
+        }
+        onComplete({
+          name: formData.name,
+          phone: formData.phone,
+          businessType: formData.businessType,
+          businessName: formData.businessName,
+          location: formData.location
+        });
+      }, 1000);
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Invalid OTP code. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleNext = async () => {
     if (step < 3) {
       setStep(step + 1);
-    } else {
-      if (!formData.businessType) {
-        return;
-      }
-      onComplete({
-        name: formData.name,
-        phone: formData.phone,
-        businessType: formData.businessType,
-        businessName: formData.businessName,
-        location: formData.location
-      });
+    } else if (step === 3) {
+      // After permissions, send OTP and move to step 4
+      await handleSendOTP();
+      setStep(4);
+    } else if (step === 4) {
+      // Verify OTP
+      await handleVerifyOTP();
     }
   };
 
@@ -68,6 +152,8 @@ export function SMEOnboarding({ onComplete, onBack }: SMEOnboardingProps) {
         return Boolean(formData.businessType);
       case 3:
         return formData.businessName && formData.location && Object.values(formData.consents).every(v => v);
+      case 4:
+        return otpCode.length === 6 && !isLoading;
       default:
         return false;
     }
@@ -96,14 +182,14 @@ export function SMEOnboarding({ onComplete, onBack }: SMEOnboardingProps) {
           
           {/* Enhanced Progress Indicator */}
           <div className="flex items-center space-x-2">
-            <div className="text-sm font-bold text-green-600">{step}/3</div>
+            <div className="text-sm font-bold text-green-600">{step}/4</div>
             <div className="flex space-x-1">
-              {[1, 2, 3].map((stepNum) => (
+              {[1, 2, 3, 4].map((stepNum) => (
                 <div
                   key={stepNum}
                   className={`w-2 h-2 rounded-full transition-all duration-300 ${
-                    stepNum <= step 
-                      ? 'bg-gradient-to-r from-green-500 to-emerald-500 scale-125 animate-pulse' 
+                    stepNum <= step
+                      ? 'bg-gradient-to-r from-green-500 to-emerald-500 scale-125 animate-pulse'
                       : 'bg-gray-300'
                   }`}
                 />
@@ -115,44 +201,65 @@ export function SMEOnboarding({ onComplete, onBack }: SMEOnboardingProps) {
         <Card className="bg-white/80 backdrop-blur-sm border-2 border-white/50 shadow-2xl hover:shadow-3xl transition-all duration-500 animate-fade-in">
           {/* Glowing Border Effect */}
           <div className="absolute inset-0 bg-gradient-to-r from-green-400/20 to-emerald-400/20 rounded-xl blur-sm opacity-50" />
-          
+
           <CardHeader className="relative text-center space-y-4">
             {/* Step Icons */}
             <div className="mx-auto w-16 h-16 relative">
               <div className={`absolute inset-0 bg-gradient-to-r ${
                 step === 1 ? 'from-green-400 to-emerald-500' :
                 step === 2 ? 'from-blue-400 to-cyan-500' :
-                'from-purple-400 to-pink-500'
+                step === 3 ? 'from-purple-400 to-pink-500' :
+                'from-orange-400 to-red-500'
               } rounded-2xl blur-lg opacity-30 animate-pulse`} />
               <div className={`relative w-16 h-16 bg-gradient-to-br ${
                 step === 1 ? 'from-green-500 to-emerald-600' :
                 step === 2 ? 'from-blue-500 to-cyan-600' :
-                'from-purple-500 to-pink-600'
+                step === 3 ? 'from-purple-500 to-pink-600' :
+                'from-orange-500 to-red-600'
               } rounded-2xl flex items-center justify-center shadow-xl transform hover:scale-110 transition-transform`}>
                 {step === 1 && <Sparkles className="w-8 h-8 text-white animate-pulse" />}
                 {step === 2 && <Building className="w-8 h-8 text-white" />}
                 {step === 3 && <Shield className="w-8 h-8 text-white" />}
+                {step === 4 && <Smartphone className="w-8 h-8 text-white animate-pulse" />}
               </div>
             </div>
-            
+
             <div className="space-y-2">
               <CardTitle className={`text-2xl font-bold bg-gradient-to-r ${
                 step === 1 ? 'from-green-600 to-emerald-600' :
                 step === 2 ? 'from-blue-600 to-cyan-600' :
-                'from-purple-600 to-pink-600'
+                step === 3 ? 'from-purple-600 to-pink-600' :
+                'from-orange-600 to-red-600'
               } bg-clip-text text-transparent`}>
                 {step === 1 && "Welcome to GreenCredit! 🌱"}
                 {step === 2 && "Choose Your Business Type 🏢"}
                 {step === 3 && "Almost There! 🎉"}
+                {step === 4 && "Verify Your Phone 📱"}
               </CardTitle>
               <CardDescription className="text-gray-600 font-medium">
                 {step === 1 && "Let's start your eco-friendly lending journey"}
                 {step === 2 && "This helps us tailor the perfect experience for you"}
                 {step === 3 && "Complete your profile and unlock green benefits"}
+                {step === 4 && "Enter the code sent to your phone"}
               </CardDescription>
             </div>
           </CardHeader>
           <CardContent className="relative space-y-6">
+            {/* Error Alert */}
+            {error && (
+              <Alert variant="destructive" className="animate-in fade-in-50">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>{error}</AlertDescription>
+              </Alert>
+            )}
+
+            {/* Success Alert */}
+            {success && (
+              <Alert className="border-green-200 bg-green-50 text-green-800 animate-in fade-in-50">
+                <CheckCircle className="h-4 h-4 text-green-600" />
+                <AlertDescription>{success}</AlertDescription>
+              </Alert>
+            )}
             {step === 1 && (
               <div className="space-y-6 animate-slide-up">
                 <div className="space-y-3">
@@ -357,21 +464,97 @@ export function SMEOnboarding({ onComplete, onBack }: SMEOnboardingProps) {
               </>
             )}
 
+            {step === 4 && (
+              <div className="space-y-6 animate-slide-up">
+                {/* OTP Input */}
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label className="text-center block font-bold text-gray-700">Verification Code</Label>
+                    <div className="flex justify-center">
+                      <InputOTP
+                        maxLength={6}
+                        value={otpCode}
+                        onChange={setOtpCode}
+                      >
+                        <InputOTPGroup>
+                          <InputOTPSlot index={0} />
+                          <InputOTPSlot index={1} />
+                          <InputOTPSlot index={2} />
+                        </InputOTPGroup>
+                        <InputOTPSeparator />
+                        <InputOTPGroup>
+                          <InputOTPSlot index={3} />
+                          <InputOTPSlot index={4} />
+                          <InputOTPSlot index={5} />
+                        </InputOTPGroup>
+                      </InputOTP>
+                    </div>
+                    <p className="text-xs text-center text-gray-500">
+                      Code sent to {formData.phone}
+                    </p>
+                  </div>
+
+                  {/* Countdown Timer */}
+                  {countdown > 0 && (
+                    <div className="text-center">
+                      <p className="text-sm text-gray-600">
+                        Code expires in <span className="font-mono font-semibold text-orange-600">{formatTime(countdown)}</span>
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Resend OTP */}
+                <div className="text-center">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleSendOTP}
+                    disabled={isLoading || countdown > 240}
+                    className="text-sm"
+                  >
+                    Resend Code
+                  </Button>
+                </div>
+
+                {/* Info Box */}
+                <div className="p-4 bg-gradient-to-r from-blue-100/80 to-cyan-100/80 backdrop-blur-sm rounded-xl border border-blue-200">
+                  <div className="flex items-center justify-center space-x-2">
+                    <Smartphone className="w-5 h-5 text-blue-600" />
+                    <span className="text-sm font-medium text-blue-800">
+                      Check your phone for the 6-digit code! 📱
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="pt-6">
-              <Button 
-                onClick={handleNext} 
+              <Button
+                onClick={handleNext}
                 className={`w-full h-14 text-lg font-bold rounded-2xl shadow-xl hover:shadow-2xl transform hover:scale-105 transition-all duration-300 ${
-                  canProceed() 
-                    ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white animate-pulse' 
+                  canProceed() && !isLoading
+                    ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white animate-pulse'
                     : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                } ${step === 3 ? 'hover:rotate-1' : 'hover:-rotate-1'}`}
-                disabled={!canProceed()}
+                } ${step === 3 || step === 4 ? 'hover:rotate-1' : 'hover:-rotate-1'}`}
+                disabled={!canProceed() || isLoading}
               >
                 <div className="flex items-center justify-center space-x-3">
-                  {step === 3 ? (
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="w-6 h-6 animate-spin" />
+                      <span>{step === 4 ? 'Verifying...' : 'Sending OTP...'}</span>
+                    </>
+                  ) : step === 4 ? (
                     <>
                       <CheckCircle className="w-6 h-6 animate-bounce" />
-                      <span>Complete Setup & Start Earning!</span>
+                      <span>Verify & Complete Setup!</span>
+                      <Sparkles className="w-6 h-6 animate-pulse" />
+                    </>
+                  ) : step === 3 ? (
+                    <>
+                      <Smartphone className="w-6 h-6 animate-pulse" />
+                      <span>Send Verification Code</span>
                       <Sparkles className="w-6 h-6 animate-pulse" />
                     </>
                   ) : (

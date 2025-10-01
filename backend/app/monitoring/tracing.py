@@ -185,6 +185,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
+        response = None
 
         # Increment active requests
         metrics_collector.active_requests += 1
@@ -202,15 +203,10 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             metrics_collector.total_request_duration += duration_ms
 
             # Record error if status >= 400
-            if hasattr(response, 'status_code') and response.status_code >= 400:
+            if response is not None and hasattr(response, 'status_code') and response.status_code >= 400:
                 metrics_collector.error_count += 1
 
 
 def correlation_id_middleware(app: ASGIApp) -> ASGIApp:
     """Add correlation ID middleware to the application"""
     return CorrelationIdMiddleware(app)
-
-
-def metrics_middleware(app: ASGIApp) -> ASGIApp:
-    """Add metrics middleware to the application"""
-    return MetricsMiddleware(app)
