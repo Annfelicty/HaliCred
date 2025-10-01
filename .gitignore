@@ -1,2 +1,22 @@
 .claude/settings.local.json
 .gitignore
+
+# Environment files with secrets
+.env
+**/.env
+*.env
+
+# Keys and credentials
+backend/keys/
+*.pem
+*.key
+*.p12
+credentials.json
+
+# Temporary files
+nul
+
+# Documentation with sensitive info
+docs/codebase-analysis-2025-10-01/02-API-ANALYSIS.md
+docs/IMPLEMENTATION-COMPLETE.md
+docs/OTP-QUICK-START.md
