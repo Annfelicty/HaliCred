@@ -13,8 +13,34 @@ backend/keys/
 *.p12
 credentials.json
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+backend/lib/
+backend/lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Database migrations (generated)
+backend/migrations/
+
 # Temporary files
 nul
+backend/python
 
 # Documentation with sensitive info
 docs/codebase-analysis-2025-10-01/02-API-ANALYSIS.md

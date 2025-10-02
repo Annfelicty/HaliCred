@@ -1131,8 +1131,14 @@ class EvidenceProcessor:
 
             parsed = urlparse(file_url)
 
-            if parsed.scheme in ("", "file"):
-                local_path = Path(parsed.path if parsed.scheme else file_url)
+            # Check for local file (empty scheme, "file://", or Windows drive letter like "C:")
+            is_local_file = (
+                parsed.scheme in ("", "file") or
+                (len(parsed.scheme) == 1 and parsed.scheme.isalpha())  # Windows drive letter
+            )
+
+            if is_local_file:
+                local_path = Path(parsed.path if parsed.scheme == "file" else file_url)
                 if os.name == "nt" and parsed.scheme == "file" and parsed.path.startswith("/"):
                     # Remove leading slash for Windows drive letters
                     local_path = Path(parsed.path.lstrip("/"))
@@ -1197,7 +1203,11 @@ class EvidenceProcessor:
             )
 
         except Exception as e:
-            logger.error(f"OCR extraction error: {str(e)}")
+            # Only log as warning if Google Vision also failed (tesseract is just a fallback)
+            if "tesseract" in str(e).lower():
+                logger.debug(f"Tesseract OCR not available (using Google Vision): {str(e)}")
+            else:
+                logger.error(f"OCR extraction error: {str(e)}")
             return OCRResult(confidence=0.0, provenance={"engine": "error", "detail": str(e)})
 
     async def _analyze_image(self, image: np.ndarray) -> CVResult:
@@ -1429,12 +1439,6 @@ class EvidenceProcessor:
         confidence -= noise_ratio * 0.3
         
         return max(0.1, min(1.0, confidence))
-
-    async def _google_vision_ocr(self, image: Image.Image) -> Optional[OCRResult]:
-        """Fallback OCR using Google Vision API"""
-        # This would implement Google Vision API call
-        # For now, return None (not implemented in MVP)
-        return None
 
     def _calculate_confidence(self, ocr: OCRResult, cv: CVResult, evidence: EvidenceData) -> float:
         """Calculate overall processing confidence"""

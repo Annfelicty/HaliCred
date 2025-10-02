@@ -53,7 +53,7 @@ class LoanApplication(Base):
     tenor_months = Column(Integer)
     quoted_rate = Column(Numeric(6,4))
     greenscore_snapshot = Column(JSON)
-    status = Column(Enum("draft","submitted","approved","declined","disbursed", name="loan_status"))
+    status = Column(Enum("draft","submitted","under_review","approved","declined","disbursed", name="loan_status"))
     created_at = Column(TIMESTAMP(timezone=True), server_default=sa.func.now())
     user = relationship("User", back_populates="applications")
 

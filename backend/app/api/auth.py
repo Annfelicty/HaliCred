@@ -334,6 +334,37 @@ async def verify_otp(payload: VerifySchema, db: Session = Depends(get_db)):
                 roles=payload.roles or (["borrower"] if contact_type == "phone" else ["underwriter"]),
             )
             db.add(user)
+            db.flush()  # Ensure user.id is generated before creating GreenScore
+
+            # Initialize GreenScore for new user
+            from app.models import GreenScore
+            from uuid import uuid4
+
+            initial_greenscore = GreenScore(
+                id=uuid4(),
+                user_id=user.id,
+                score=0,  # New users start at 0
+                subscores={
+                    "energy_efficiency": 0,
+                    "water_conservation": 0,
+                    "waste_management": 0,
+                    "sustainable_sourcing": 0,
+                    "carbon_reduction": 0
+                },
+                explanation_json={
+                    "message": "Welcome! Upload evidence of your eco-friendly practices to build your GreenScore.",
+                    "pillars": {
+                        "energy_efficiency": "No data yet",
+                        "water_conservation": "No data yet",
+                        "waste_management": "No data yet",
+                        "sustainable_sourcing": "No data yet",
+                        "carbon_reduction": "No data yet"
+                    }
+                },
+                computed_at=_now()
+            )
+            db.add(initial_greenscore)
+
             new_user = True
         else:
             if contact_type == "phone" and not user.phone:

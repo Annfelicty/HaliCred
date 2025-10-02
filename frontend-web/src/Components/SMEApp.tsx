@@ -186,7 +186,7 @@ export function SMEApp({ onBack }: SMEAppProps) {
         greenScore:
           (greenscoreResponse && typeof greenscoreResponse?.greenscore === 'number'
             ? greenscoreResponse.greenscore
-            : undefined) ?? cached?.greenScore ?? 45,
+            : undefined) ?? cached?.greenScore ?? 0,
         ecoActions: cached?.ecoActions ?? [],
         loanApplications: mappedLoans,
       };
@@ -240,7 +240,7 @@ export function SMEApp({ onBack }: SMEAppProps) {
         businessType: userData.businessType,
         businessName: userData.businessName,
         location: userData.location,
-        greenScore: user?.greenScore ?? 45,
+        greenScore: user?.greenScore ?? 0,
         ecoActions: user?.ecoActions ?? [],
         loanApplications: user?.loanApplications ?? [],
       };
@@ -259,7 +259,7 @@ export function SMEApp({ onBack }: SMEAppProps) {
         businessType: userData.businessType,
         businessName: userData.businessName,
         location: userData.location,
-        greenScore: user?.greenScore ?? 45,
+        greenScore: user?.greenScore ?? 0,
         ecoActions: user?.ecoActions ?? [],
         loanApplications: user?.loanApplications ?? [],
       };

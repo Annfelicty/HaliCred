@@ -151,8 +151,8 @@ class GreenScoreResult(Base):
     
     # Confidence and quality
     confidence = Column(Float, nullable=False)
-    explainers = Column(JSON)
-    actions = Column(JSON)
+    explainers = Column(ARRAY(String))  # Database has VARCHAR[], not JSON
+    actions = Column(ARRAY(String))     # Database has VARCHAR[], not JSON
     
     # Calculation metadata
     sector = Column(String(50), nullable=False)

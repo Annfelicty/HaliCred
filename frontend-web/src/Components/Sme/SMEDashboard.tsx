@@ -147,18 +147,28 @@ interface SMEDashboardProps {
 
 export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepayments, onBack }: SMEDashboardProps) {
   const { greenScore, error: scoreError, fetchCurrentScore } = useGreenScore();
-  const [recommendations, setRecommendations] = useState<any[]>([]);
+
+  // Static fallback recommendations shown immediately
+  const staticRecommendations = [
+    { action: 'Install energy-efficient LED lighting', priority: 'High', impact: 'Reduces energy costs by 40-60%' },
+    { action: 'Implement solar water heating', priority: 'Medium', impact: 'Cuts water heating costs by 50-80%' },
+    { action: 'Start composting organic waste', priority: 'Medium', impact: 'Reduces waste disposal costs and creates fertilizer' },
+    { action: 'Switch to renewable energy sources', priority: 'High', impact: 'Long-term savings and carbon reduction' }
+  ];
+
+  const [recommendations, setRecommendations] = useState<any[]>(staticRecommendations);
   const [loadingRecommendations, setLoadingRecommendations] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [aiRecommendationsLoaded, setAiRecommendationsLoaded] = useState(false);
   const prefersReducedMotion = useReducedMotion();
 
   useEffect(() => {
     const loadInitialData = async () => {
       try {
-        await Promise.all([
-          fetchCurrentScore(),
-          fetchRecommendations()
-        ]);
+        // Load score immediately
+        await fetchCurrentScore();
+        // Load AI recommendations in background (don't show loading spinner)
+        fetchRecommendations(false);
       } finally {
         setInitialLoading(false);
       }
@@ -167,25 +177,32 @@ export function SMEDashboard({ user, onUploadEvidence, onViewLoans, onViewRepaym
     loadInitialData();
   }, []);
 
-  const fetchRecommendations = async () => {
+  const fetchRecommendations = async (showLoading: boolean = true) => {
     try {
-      setLoadingRecommendations(true);
-      // Fetch personalized recommendations from the API
-      const response = await fetch('/api/ai/carbon-credits/recommendations', {
+      // Fetch AI-powered personalized recommendations from the API
+      const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE_URL}/ai/carbon-credits/recommendations`, {
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Authorization': `Bearer ${localStorage.getItem('access_token')}`,
           'Content-Type': 'application/json',
         },
       });
       if (response.ok) {
         const data = await response.json();
-        setRecommendations(data.recommendations || []);
+        if (data.recommendations && data.recommendations.length > 0) {
+          // When AI response arrives, show brief loading to indicate refresh is happening
+          setLoadingRecommendations(true);
+          await new Promise(resolve => setTimeout(resolve, 500)); // Brief loading animation to show update
+
+          // Replace static recommendations with AI-powered ones
+          setRecommendations(data.recommendations);
+          setAiRecommendationsLoaded(true);
+          setLoadingRecommendations(false);
+        }
       }
     } catch (error) {
-      console.error('Failed to fetch recommendations:', error);
-      // Keep hardcoded fallback if API fails
-    } finally {
-      setLoadingRecommendations(false);
+      console.error('Failed to fetch AI recommendations, using static fallback:', error);
+      // Keep static recommendations if API fails
     }
   };
 

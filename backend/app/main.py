@@ -524,6 +524,7 @@ async def loan_quote(payload: schemas.LoanQuoteSchema, user: User = Depends(get_
             },
             "compliance_checks": quote.compliance_checks,
             "terms_and_conditions": quote.terms_and_conditions,
+            "eligibility_warnings": quote.eligibility_warnings,  # Show eligibility issues
             "options": [{
                 "tenor": quote.tenor_months,
                 "rate": quote.effective_apr,
@@ -531,12 +532,6 @@ async def loan_quote(payload: schemas.LoanQuoteSchema, user: User = Depends(get_
                 "discount_reason": f"greenscore_bonus_{quote.green_score_bonus:.1%}"
             }]
         }
-
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
     except Exception as e:
         logger.error(f"Quote generation failed: {e}")
         # Fallback to legacy quote system

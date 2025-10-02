@@ -4,8 +4,9 @@ import os
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import desc
+from sqlalchemy import desc, func
 
+from app.models import GreenScore
 from app.db.ai_models import (
     AIEvidence,
     OCRResult,
@@ -112,13 +113,13 @@ class AIService:
         """Build a summarized view of the user's carbon credits."""
         try:
             credits = (
-                self.db.query(CarbonCredit)
-                .filter(CarbonCredit.user_id == user_id)
-                .order_by(desc(CarbonCredit.created_at))
+                self.db.query(CarbonCreditDB)
+                .filter(CarbonCreditDB.user_id == user_id)
+                .order_by(desc(CarbonCreditDB.created_at))
                 .all()
             )
 
-            def summarize(items: List[CarbonCredit]) -> Dict[str, Any]:
+            def summarize(items: List[CarbonCreditDB]) -> Dict[str, Any]:
                 return {
                     "count": len(items),
                     "tonnes_co2": round(sum(c.tonnes_co2 for c in items), 3),
@@ -255,7 +256,8 @@ class AIService:
                 }
             )
 
-            evidence_payload = EvidenceData(
+            # Create EvidenceData from upload
+            evidence_data = EvidenceData(
                 evidence_id=str(evidence.id),
                 user_id=user_id,
                 type=normalized_type,
@@ -268,9 +270,16 @@ class AIService:
                 },
             )
 
+            # Process evidence through Google Vision to get ProcessedEvidence
+            from app.ai.evidence_processor import evidence_processor
+            processed_evidence = await evidence_processor.process_evidence(evidence_data)
+
+            logger.info(f"Evidence processed with confidence: {processed_evidence.processing_confidence:.2f}")
+
+            # Pass ProcessedEvidence to AIOrchestrator (not EvidenceData)
             orchestration_result = await orchestrator.process_request(
                 AIOrchestrationRequest(
-                    evidence=evidence_payload,
+                    evidence=processed_evidence,
                     sector=sector,
                     region=region,
                     user_profile={"user_id": user_id},
@@ -295,6 +304,9 @@ class AIService:
             )
             self.db.add(greenscore_record)
             self.db.commit()
+
+            # Update user's main GreenScore by aggregating all their GreenScoreResults
+            self._update_user_greenscore(user_id)
 
             processing_time = int((time.time() - start_time) * 1000)
 
@@ -411,3 +423,89 @@ class AIService:
             "explainers": explainers,
             "actions": actions
         }
+
+    def _update_user_greenscore(self, user_id: str):
+        """
+        Aggregate all GreenScoreResults for a user and update their main GreenScore.
+        Called after each new evidence is processed.
+        """
+        try:
+            # Get all GreenScoreResults for this user
+            all_results = self.db.query(GreenScoreResult).filter(
+                GreenScoreResult.user_id == user_id
+            ).all()
+
+            if not all_results:
+                logger.warning(f"No GreenScoreResults found for user {user_id}")
+                return
+
+            # Aggregate with diminishing returns (not simple sum)
+            # Sort by score descending to apply diminishing returns fairly
+            sorted_results = sorted(all_results, key=lambda r: r.greenscore, reverse=True)
+
+            # Apply weighted scoring with diminishing returns
+            # 1st evidence: 100% weight
+            # 2nd evidence: 80% weight
+            # 3rd evidence: 60% weight
+            # 4th evidence: 40% weight
+            # 5th+ evidence: 20% weight
+            weights = [1.0, 0.8, 0.6, 0.4, 0.2]
+
+            total_score = 0.0
+            for i, result in enumerate(sorted_results):
+                weight = weights[i] if i < len(weights) else 0.2  # 20% for all subsequent evidence
+                total_score += result.greenscore * weight
+
+            final_score = min(round(total_score), 100)  # Cap at 100
+
+            # Average subscores across all results (updated to match 4-category system)
+            subscore_keys = ["energy_efficiency", "water_conservation", "waste_management", "renewable_energy"]
+            aggregated_subscores = {}
+
+            for key in subscore_keys:
+                scores = [r.subscores.get(key, 0) for r in all_results if r.subscores]
+                aggregated_subscores[key] = round(sum(scores) / len(scores), 1) if scores else 0
+
+            # Total CO2 saved
+            total_co2_saved = sum(r.co2_saved_tonnes or 0 for r in all_results)
+
+            # Build explanation with weighted scoring note
+            explanation = {
+                "message": f"Your GreenScore of {final_score} is based on {len(all_results)} verified evidence submissions (weighted with diminishing returns).",
+                "pillars": {
+                    "energy_efficiency": aggregated_subscores.get("energy_efficiency", 0),
+                    "water_conservation": aggregated_subscores.get("water_conservation", 0),
+                    "waste_management": aggregated_subscores.get("waste_management", 0),
+                    "renewable_energy": aggregated_subscores.get("renewable_energy", 0)
+                },
+                "total_co2_saved_tonnes": round(total_co2_saved, 2)
+            }
+
+            # Update or create main GreenScore
+            existing_score = self.db.query(GreenScore).filter(
+                GreenScore.user_id == user_id
+            ).order_by(GreenScore.computed_at.desc()).first()
+
+            if existing_score:
+                existing_score.score = final_score
+                existing_score.subscores = aggregated_subscores
+                existing_score.explanation_json = explanation
+                existing_score.computed_at = datetime.utcnow()
+            else:
+                from uuid import uuid4
+                new_score = GreenScore(
+                    id=uuid4(),
+                    user_id=user_id,
+                    score=final_score,
+                    subscores=aggregated_subscores,
+                    explanation_json=explanation,
+                    computed_at=datetime.utcnow()
+                )
+                self.db.add(new_score)
+
+            self.db.commit()
+            logger.info(f"✅ Updated GreenScore for user {user_id}: {final_score} (from {len(all_results)} evidence)")
+
+        except Exception as e:
+            logger.error(f"Error updating user GreenScore: {e}", exc_info=True)
+            self.db.rollback()

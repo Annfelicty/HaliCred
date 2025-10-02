@@ -153,7 +153,7 @@ class AIOrchestrator:
             self._update_average_processing_time(processing_time)
 
             # Evaluate confidence and determine if human review is needed
-            result.review_required = self._requires_human_review(result)
+            result.requires_human_review = self._requires_human_review(result)
 
             logger.info(f"✅ Processing complete for {processing_id} in {processing_time:.2f}s")
             logger.info(f"📈 Score: {result.greenscore}, Confidence: {result.confidence:.2f}")
@@ -173,11 +173,11 @@ class AIOrchestrator:
                 subscores={},
                 co2_saved_tonnes=0.0,
                 confidence=0.0,
-                explainers=[f"Processing error: {str(e)}"],
-                actions=[],
+                explainers=[f"Processing error: {str(e)}"],  # List, not JSON string
+                actions=[],  # List, not JSON string
                 processing_time_ms=processing_time * 1000,
-                review_required=True,  # Always require review for failed processing
-                error_details=str(e)
+                requires_human_review=True,  # Correct field name
+                provenance={"error_details": str(e)}  # Store error in provenance
             )
 
     async def _llm_orchestrated_processing(self, request: AIOrchestrationRequest, api_client) -> AIOrchestrationResult:
@@ -188,27 +188,76 @@ class AIOrchestrator:
             # Create context for LLM
             context = self._build_context(request)
 
-            # System prompt for the orchestrator LLM
-            system_prompt = """You are an AI orchestrator for GreenCredit Score calculation.
-            Your role is to analyze evidence of sustainable business practices and coordinate
-            microservices to calculate accurate GreenScores and carbon credits.
+            # Enhanced system prompt with detailed scoring guidance
+            system_prompt = """You are an AI orchestrator for GreenCredit Score calculation in Kenya.
+            Your role is to analyze evidence of sustainable business practices and calculate GreenScores fairly and consistently.
 
-            Analyze the evidence step by step:
-            1. Identify what type of sustainable action this evidence represents
-            2. Extract quantitative information (costs, quantities, timeframes)
-            3. Calculate environmental impact and CO2 savings
-            4. Determine GreenScore contribution (0-100 scale)
-            5. Provide specific improvement recommendations
+            SCORING PHILOSOPHY (Financial Product - Be Fair, Not Generous):
+            - ONLY SCORE VERIFIABLE ECO-ACTIONS: Evidence must show clear sustainability investment or practice
+            - SCORE RANGES:
+              * 0-5 points: Minimal/unclear evidence, low-value actions (e.g., single LED bulb receipt)
+              * 6-15 points: Basic sustainable practice with clear evidence (e.g., LED lighting set, small solar panel)
+              * 16-25 points: Significant eco-investment with strong proof (e.g., solar system with invoice, drip irrigation)
+              * 26-35 points: Major sustainability initiative with detailed documentation (e.g., biogas system, large solar array)
+            - GIVE 0 POINTS: If evidence is unrelated, duplicate, unclear, or appears fraudulent
+            - QUALITY MATTERS: Receipts + photos = higher score than photos alone
 
-            Return a JSON response with:
+            EVIDENCE CATEGORIES & BASE SCORES:
+            1. **Solar/Renewable Energy**: 15-30 points (panels, biogas, wind)
+            2. **LED/Energy Efficiency**: 10-20 points (LED bulbs, efficient motors, insulation)
+            3. **Water Conservation**: 10-25 points (rainwater harvest, drip irrigation, water recycling)
+            4. **Waste Management**: 10-20 points (recycling, composting, waste reduction)
+            5. **Sustainable Sourcing**: 8-18 points (organic inputs, local suppliers, eco-packaging)
+            6. **Receipts/Purchases**: 8-15 points (show intent even if not installed yet)
+            7. **Before/After Photos**: 12-22 points (demonstrate actual implementation)
+            8. **Meters/Monitoring**: 10-20 points (shows data-driven sustainability)
+
+            SECTOR-SPECIFIC PRIORITIES:
+            - Agriculture: Water systems (25 pts), Solar pumps (30 pts), Organic fertilizer (15 pts)
+            - Salon/Beauty: LED lighting (18 pts), Water recycling (20 pts), Eco-products (12 pts)
+            - Welding/Manufacturing: Solar power (28 pts), Efficient equipment (22 pts), Scrap recycling (15 pts)
+            - Transport: Electric/Hybrid vehicles (35 pts), Route optimization (10 pts), Maintenance logs (8 pts)
+            - Other: General eco-actions (10-20 pts based on impact)
+
+            CONFIDENCE SCORING:
+            - High (0.7-0.95): Clear equipment visible, receipts with details, meter readings
+            - Medium (0.5-0.69): Photos without receipts, unclear equipment, general sustainability
+            - Low (0.3-0.49): Minimal evidence, could be misidentified
+            - NEVER 0.0 confidence unless score is 0
+
+            CO2 ESTIMATION (Kenya context - for informational explainers):
+            - Solar panel (per kW): 1.2 tonnes CO2/year (Kenya grid: 0.6 kg CO2/kWh)
+            - LED bulb (vs incandescent): 0.05 tonnes CO2/year per bulb
+            - Drip irrigation: 0.3 tonnes CO2/year (reduces pump usage)
+            - Biogas digester: 2.5 tonnes CO2/year (replaces firewood/charcoal)
+            - Water recycling: 0.2 tonnes CO2/year (reduces pumping)
+
+            NOTE: Provide rough co2_saved_tonnes estimate for context. Final CO2 calculations use real-time Climatiq API data.
+
+            CRITICAL: Return ONLY valid JSON, no explanatory text before or after.
+
+            Required JSON format (use EXACT keys):
             {
-                "greenscore": 75,
-                "subscores": {"energy": 80, "water": 70, "waste": 75, "behavior": 80},
-                "co2_saved_tonnes": 1.2,
-                "confidence": 0.85,
-                "explainers": ["Solar panel installation saves 1.2 tonnes CO2/year"],
-                "actions": ["Consider adding battery storage for +10 points"]
-            }"""
+                "greenscore": 18,
+                "subscores": {
+                    "energy_efficiency": 25,
+                    "water_conservation": 15,
+                    "waste_management": 20,
+                    "renewable_energy": 22
+                },
+                "co2_saved_tonnes": 0.8,
+                "confidence": 0.65,
+                "explainers": ["LED lighting installation saves 0.8 tonnes CO2/year, reducing energy costs by ~30%"],
+                "actions": ["Add solar panels to power LEDs for +15 points and greater CO2 reduction"]
+            }
+
+            SUBSCORE GUIDELINES (0-100 scale for each category):
+            1. **energy_efficiency**: LED lighting, efficient appliances, insulation, smart systems
+            2. **water_conservation**: Rainwater harvest, drip irrigation, recycling, efficient fixtures
+            3. **waste_management**: Recycling, composting, waste reduction, proper disposal
+            4. **renewable_energy**: Solar panels, biogas, wind power, solar pumps, battery storage
+
+            Return ONLY the JSON object above, nothing else."""
 
             # Build comprehensive prompt
             prompt = f"""
@@ -224,17 +273,69 @@ class AIOrchestrator:
             Please analyze this evidence and provide a detailed GreenScore assessment.
             """
 
-            # Call Gemini API through external client
-            gemini_response = await api_client.call_gemini_api(prompt)
+            # Call Gemini API through external client with retry logic
+            import json
+            import re
 
-            # Parse JSON response
-            try:
-                import json
-                result_data = json.loads(gemini_response)
-            except json.JSONDecodeError:
-                logger.warning("Failed to parse Gemini JSON response, using deterministic fallback")
-                result_data = await self._deterministic_processing(request)
-                result_data = result_data.__dict__
+            gemini_response = None
+            max_retries = 2
+
+            for attempt in range(max_retries):
+                try:
+                    gemini_response = await api_client.call_gemini_api(prompt)
+
+                    # Check if response is empty
+                    if not gemini_response or not gemini_response.strip():
+                        logger.warning(f"Gemini returned empty response (attempt {attempt + 1}/{max_retries})")
+                        if attempt < max_retries - 1:
+                            continue
+                        else:
+                            raise ValueError("Empty response from Gemini after retries")
+
+                    response_text = gemini_response.strip()
+
+                    # Strip markdown code fences if present (Gemini wraps JSON in ```json ... ```)
+                    if response_text.startswith("```"):
+                        # Remove ```json at start
+                        response_text = re.sub(r'^```(?:json|JSON)?\s*\n?', '', response_text)
+                        # Remove ``` at end
+                        response_text = re.sub(r'\n?\s*```\s*$', '', response_text)
+                        response_text = response_text.strip()
+
+                    # Try to parse JSON
+                    result_data = json.loads(response_text)
+                    logger.info(f"✅ Successfully parsed Gemini JSON response (attempt {attempt + 1})")
+                    break  # Success, exit retry loop
+
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.warning(f"Failed to parse Gemini response (attempt {attempt + 1}/{max_retries}): {e}")
+                    if gemini_response:
+                        logger.error(f"Full Gemini response: {gemini_response}")
+
+                    if attempt < max_retries - 1:
+                        logger.info("Retrying Gemini API call...")
+                        continue
+                    else:
+                        logger.warning("All retries exhausted, using deterministic fallback")
+                        result_data = await self._deterministic_processing(request)
+                        result_data = result_data.__dict__
+
+            # Calculate emissions using real-time Climatiq data (instead of Gemini's estimate)
+            features = getattr(request.evidence, "features", None)
+            if not features:
+                from app.ai.models import EmissionFeatures
+                features = EmissionFeatures()
+
+            emission_result = await self.emission_calculator.calculate_emissions(
+                evidence_id=request.evidence.evidence_id,
+                sector=request.sector,
+                features=features,
+                region=request.region,
+            )
+
+            # Replace Gemini's CO2 estimate with Climatiq-calculated value
+            calculated_co2_tonnes = emission_result.co2_kg_total / 1000.0  # Convert kg to tonnes
+            logger.info(f"🌍 Climatiq CO2 calculation: {calculated_co2_tonnes:.3f} tonnes (method: {emission_result.method})")
 
             processing_time = (datetime.now() - start_time).total_seconds() * 1000
 
@@ -243,7 +344,7 @@ class AIOrchestrator:
                 user_id=request.evidence.user_id,
                 greenscore=result_data.get("greenscore", 50),
                 subscores=result_data.get("subscores", {}),
-                co2_saved_tonnes=result_data.get("co2_saved_tonnes", 0.0),
+                co2_saved_tonnes=calculated_co2_tonnes,  # Use Climatiq calculation, not Gemini estimate
                 confidence=result_data.get("confidence", 0.8),
                 explainers=result_data.get("explainers", []),
                 actions=result_data.get("actions", []),
@@ -342,6 +443,42 @@ class AIOrchestrator:
             "confidence": greenscore_result.confidence if greenscore_result else 0.5
         }
 
+    def _build_context(self, request: AIOrchestrationRequest) -> str:
+        """Build context string from evidence for LLM processing"""
+        context_parts = []
+
+        # OCR results
+        if request.evidence.ocr and request.evidence.ocr.raw_text:
+            context_parts.append(f"OCR Text: {request.evidence.ocr.raw_text[:500]}")  # Limit length
+            if request.evidence.ocr.vendor:
+                context_parts.append(f"Vendor: {request.evidence.ocr.vendor}")
+            if request.evidence.ocr.amount_ksh:
+                context_parts.append(f"Amount: KSH {request.evidence.ocr.amount_ksh}")
+
+        # Computer Vision results
+        if request.evidence.cv and request.evidence.cv.labels:
+            context_parts.append(f"Detected: {', '.join(request.evidence.cv.labels[:10])}")
+
+        # Features
+        if request.evidence.features:
+            features_list = []
+            if request.evidence.features.solar_kwh_generated:
+                features_list.append(f"Solar: {request.evidence.features.solar_kwh_generated} kWh/year")
+            if request.evidence.features.kwh_saved:
+                features_list.append(f"Energy Saved: {request.evidence.features.kwh_saved} kWh")
+            if request.evidence.features.water_m3_saved:
+                features_list.append(f"Water Saved: {request.evidence.features.water_m3_saved} m³")
+            if features_list:
+                context_parts.append("Features: " + ", ".join(features_list))
+
+        # User profile
+        if request.user_profile:
+            profile_info = [f"{k}: {v}" for k, v in request.user_profile.items() if k != "user_id"]
+            if profile_info:
+                context_parts.append("User: " + ", ".join(profile_info[:5]))
+
+        return " | ".join(context_parts) if context_parts else "No additional context"
+
     async def _deterministic_processing(self, request: AIOrchestrationRequest) -> AIOrchestrationResult:
         """Fallback deterministic processing without LLM"""
         start_time = datetime.now()
@@ -353,13 +490,17 @@ class AIOrchestrator:
             features = getattr(request.evidence, "features", None)
 
             # Step 2: Calculate emissions
+            # Note: EmissionCalculator only needs features, not raw OCR/CV results
+            if not features:
+                # If no features extracted, create empty EmissionFeatures
+                from app.ai.models import EmissionFeatures
+                features = EmissionFeatures()
+
             emission_result = await self.emission_calculator.calculate_emissions(
                 evidence_id=request.evidence.evidence_id,
                 sector=request.sector,
-                region=request.region,
-                ocr_result=ocr_result,
-                cv_result=cv_result,
                 features=features,
+                region=request.region,
             )
 
             # Step 3: Estimate user metrics

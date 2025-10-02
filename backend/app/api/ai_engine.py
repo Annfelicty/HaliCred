@@ -15,7 +15,8 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.db import get_db
-from app.models import User, GreenScore, Evidence, BusinessProfile
+from app.models import User, GreenScore, BusinessProfile, Evidence
+from app.db.ai_models import AIEvidence
 from app.auth import get_current_user
 from app.ai import (
     AIOrchestrator, ConfidenceManager, SectorBaselineService, 
@@ -123,6 +124,7 @@ async def process_evidence(
         # Update evidence status based on processing result
         if result.get("success"):
             evidence.status = "verified"
+            logger.info(f"✅ Evidence {evidence.id} status updated to 'verified'")
 
             # Create or update GreenScore if processing was successful
             if result.get("greenscore"):
@@ -135,8 +137,10 @@ async def process_evidence(
                 db.add(green_score)
         else:
             evidence.status = "rejected"
+            logger.warning(f"⚠️ Evidence {evidence.id} status updated to 'rejected'")
 
         db.commit()
+        logger.info(f"💾 Evidence status committed to database: {evidence.status}")
 
         # Clean up temporary file
         try:
@@ -299,14 +303,33 @@ async def get_carbon_credit_recommendations(
             BusinessProfile.user_id == user.id
         ).first()
 
-        # Get user's evidence history
-        evidence_count = db.query(Evidence).filter(
-            Evidence.user_id == user.id
-        ).count()
+        # Get user's evidence history with details
+        evidence_list = db.query(AIEvidence).filter(
+            AIEvidence.user_id == user.id
+        ).order_by(AIEvidence.uploaded_at.desc()).limit(10).all()
 
-        # Generate personalized recommendations using Gemini
+        evidence_count = len(evidence_list)
+
+        # Extract evidence summary (what they've already done)
+        evidence_summary = []
+        for ev in evidence_list:
+            if ev.description:
+                evidence_summary.append(ev.description[:100])
+            elif ev.file_name:
+                # Extract hints from filename
+                fname_lower = ev.file_name.lower()
+                if 'solar' in fname_lower:
+                    evidence_summary.append("Solar installation")
+                elif 'led' in fname_lower or 'light' in fname_lower:
+                    evidence_summary.append("LED lighting")
+                elif 'water' in fname_lower or 'irrigation' in fname_lower:
+                    evidence_summary.append("Water system")
+                elif 'waste' in fname_lower or 'recycle' in fname_lower:
+                    evidence_summary.append("Waste management")
+
+        # Generate personalized recommendations using Gemini AI
         recommendations = await generate_personalized_recommendations(
-            user, latest_score, business_profile, evidence_count
+            user, latest_score, business_profile, evidence_count, evidence_summary
         )
 
         return {
@@ -496,13 +519,61 @@ async def get_sector_context(sector: str) -> Dict[str, Any]:
         "participant_count": 1250
     }
 
+# Recommendations cache (1 hour TTL)
+RECOMMENDATIONS_CACHE: Dict[str, tuple[List[Dict[str, Any]], float]] = {}
+CACHE_TTL = 3600  # 1 hour in seconds
+
+try:
+    import redis
+    from app.config import settings
+    recommendations_redis = redis.Redis.from_url(
+        settings.CELERY_BROKER_URL,
+        decode_responses=False,  # We'll handle JSON manually
+        socket_connect_timeout=5,
+        socket_timeout=5
+    )
+    recommendations_redis.ping()
+    logger.info("Recommendations cache using Redis")
+except Exception as e:
+    logger.warning(f"Redis unavailable for recommendations cache, using memory: {e}")
+    recommendations_redis = None
+
 async def generate_personalized_recommendations(
     user: User,
     latest_score: Optional[GreenScore],
     business_profile: Optional[BusinessProfile],
-    evidence_count: int
+    evidence_count: int,
+    evidence_summary: List[str] = []
 ) -> List[Dict[str, Any]]:
-    """Generate personalized recommendations using Gemini AI"""
+    """Generate personalized recommendations using Gemini AI with 1-hour caching"""
+    import json
+    import time
+
+    # Build cache key using hourly time bucket (cache persists for 1 hour regardless of evidence changes)
+    hour_bucket = int(time.time() // 3600)  # 1-hour time buckets
+    cache_key = f"recommendations:{user.id}:{hour_bucket}"
+
+    # Try to get from cache (Redis first, then memory)
+    try:
+        if recommendations_redis:
+            cached_data = recommendations_redis.get(cache_key)
+            if cached_data:
+                logger.info(f"✅ Returning cached recommendations for user {user.id}")
+                return json.loads(cached_data)
+        else:
+            # Memory cache fallback
+            if cache_key in RECOMMENDATIONS_CACHE:
+                cached_recs, timestamp = RECOMMENDATIONS_CACHE[cache_key]
+                if time.time() - timestamp < CACHE_TTL:
+                    logger.info(f"✅ Returning cached recommendations (memory) for user {user.id}")
+                    return cached_recs
+                else:
+                    # Expired, remove from cache
+                    del RECOMMENDATIONS_CACHE[cache_key]
+    except Exception as e:
+        logger.warning(f"Cache retrieval failed: {e}")
+
+    # Cache miss - generate new recommendations
     try:
         import google.generativeai as genai
         from app.config import settings
@@ -511,41 +582,84 @@ async def generate_personalized_recommendations(
         genai.configure(api_key=settings.GEMINI_API_KEY)
         model = genai.GenerativeModel('gemini-2.5-flash')
 
-        # Build user context
-        current_score = latest_score.score if latest_score else 50
+        # Extract user context
+        current_score = latest_score.score if latest_score else 0
         subscores = latest_score.subscores if latest_score else {}
         business_type = business_profile.business_type if business_profile else "unknown"
         business_name = business_profile.business_name if business_profile else "Business"
         location = business_profile.location if business_profile else "Kenya"
 
-        # Create personalized prompt
+        # Identify weak areas for targeted recommendations
+        weak_areas = []
+        for pillar, score in subscores.items():
+            if score < 30:
+                weak_areas.append(pillar)
+
+        engagement_level = "new" if evidence_count == 0 else ("low" if evidence_count < 3 else "active")
+
+        # Build evidence history context
+        evidence_context = "None yet - this is their first time" if not evidence_summary else "\n".join([f"  • {ev}" for ev in evidence_summary[:5]])
+
+        # Create enhanced, HYPERAWARE user-centric prompt
         prompt = f"""
-        You are an AI sustainability advisor for SMEs in Kenya. Generate 3-4 personalized carbon reduction recommendations for this business:
+        You are HaliCred's AI sustainability advisor specializing in Kenyan SMEs. Your role is to recommend high-impact carbon credit opportunities that are practical and profitable.
 
-        Business Profile:
+        BUSINESS CONTEXT:
         - Name: {business_name}
-        - Type: {business_type}
-        - Location: {location}
-        - Current GreenScore: {current_score}/100
-        - Energy Score: {subscores.get('energy', 'N/A')}
-        - Water Score: {subscores.get('water', 'N/A')}
-        - Waste Score: {subscores.get('waste', 'N/A')}
-        - Evidence uploaded: {evidence_count} files
+        - Sector: {business_type}
+        - Region: {location}, Kenya
+        - Current GreenScore: {current_score}/100 (0-30: Beginner, 31-60: Intermediate, 61-100: Advanced)
+        - Engagement Level: {engagement_level} ({evidence_count} evidence submissions)
 
-        Generate specific, actionable recommendations that are:
-        1. Relevant to their business type
-        2. Appropriate for Kenya's context
-        3. Focus on areas where their scores are lowest
-        4. Include realistic cost estimates and payback periods
+        ACTIONS ALREADY TAKEN (do NOT repeat these):
+{evidence_context}
 
-        Return ONLY a JSON array with this exact format:
+        PERFORMANCE BREAKDOWN:
+        - Energy Efficiency: {subscores.get('energy_efficiency', 0)}/100
+        - Water Conservation: {subscores.get('water_conservation', 0)}/100
+        - Waste Management: {subscores.get('waste_management', 0)}/100
+        - Sustainable Sourcing: {subscores.get('sustainable_sourcing', 0)}/100
+        - Carbon Reduction: {subscores.get('carbon_reduction', 0)}/100
+
+        WEAK AREAS (priority): {', '.join(weak_areas) if weak_areas else 'None - all areas need development'}
+
+        YOUR TASK:
+        Generate 4 SPECIFIC, ACTIONABLE carbon credit opportunities ranked by:
+        1. **Impact on weak areas** (highest priority)
+        2. **ROI for {business_type} businesses in Kenya**
+        3. **Feasibility at GreenScore level {current_score}**
+        4. **Carbon credit monetization potential**
+
+        CRITICAL REQUIREMENTS:
+        - **DO NOT repeat actions they've already taken** (listed above)
+        - Recommend NEXT STEPS that build on their current progress
+        - If they have solar, suggest battery storage or expanding capacity
+        - If they have LED, suggest solar to power them or smart controls
+        - Match recommendations to their current capability (don't suggest solar farms if they're at 10/100)
+        - Use Kenya-specific costs (KES converted to USD at 150:1)
+        - Include exact equipment/actions, not generic advice
+        - Prioritize quick wins for beginners (score < 30)
+        - For advanced users (score > 60), suggest certification/aggregation opportunities
+
+        CONTEXT AWARENESS:
+        - {business_type} sector typically has high potential in: {"solar energy, drip irrigation" if business_type == "agriculture" else "LED lighting, efficient motors" if business_type == "manufacturing" else "waste reduction, energy efficiency"}
+        - Common barriers: upfront cost, technical know-how
+        - Local suppliers: Available for solar, biogas, LED, water systems
+
+        CARBON CREDIT VALUE:
+        - Current price: ~$15-25 per tonne CO2e
+        - Include GreenScore impact: +5 to +20 points per action
+
+        Return ONLY a JSON array (no markdown, no explanations):
         [
           {{
-            "action": "Specific action to take",
-            "estimated_co2_tonnes": 0.8,
-            "estimated_value_usd": 15.20,
-            "payback_period_months": 6,
-            "priority": "high"
+            "action": "[Exact action with equipment/vendor if relevant] e.g., 'Install 5kW solar system from Chloride Exide Kenya'",
+            "estimated_co2_tonnes": [Annual tonnes saved],
+            "estimated_value_usd": [Carbon credits value at $20/tonne],
+            "payback_period_months": [ROI from energy savings + carbon credits],
+            "priority": "high|medium|low",
+            "greenscore_impact": "+[5-20] points",
+            "pillar": "[energy_efficiency|water_conservation|waste_management|sustainable_sourcing|carbon_reduction]"
           }}
         ]
         """
@@ -555,20 +669,59 @@ async def generate_personalized_recommendations(
 
         # Parse JSON response
         import json
+        import re
         try:
-            recommendations = json.loads(response.text.strip())
+            response_text = response.text.strip()
+
+            # Strip markdown code fences if present (Gemini wraps JSON in ```json ... ```)
+            if response_text.startswith("```"):
+                # Remove ```json at start
+                response_text = re.sub(r'^```(?:json|JSON)?\s*\n?', '', response_text)
+                # Remove ``` at end
+                response_text = re.sub(r'\n?\s*```\s*$', '', response_text)
+                response_text = response_text.strip()
+
+            recommendations = json.loads(response_text)
             # Ensure we have valid recommendations
             if isinstance(recommendations, list) and len(recommendations) > 0:
-                return recommendations[:4]  # Limit to 4 recommendations
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse Gemini JSON response")
+                limited_recs = recommendations[:4]  # Limit to 4 recommendations
+
+                # Store in cache for 1 hour
+                try:
+                    if recommendations_redis:
+                        recommendations_redis.setex(
+                            cache_key,
+                            CACHE_TTL,
+                            json.dumps(limited_recs)
+                        )
+                    else:
+                        RECOMMENDATIONS_CACHE[cache_key] = (limited_recs, time.time())
+                    logger.info(f"🔄 Cached new recommendations for user {user.id}")
+                except Exception as cache_err:
+                    logger.warning(f"Failed to cache recommendations: {cache_err}")
+
+                return limited_recs
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse Gemini JSON response: {e}")
+            logger.debug(f"Response text (first 200 chars): {response.text[:200]}")
 
     except Exception as e:
         logger.error(f"Error generating Gemini recommendations: {str(e)}")
 
     # Fallback to sector-specific recommendations
     sector = business_profile.business_type if business_profile else "general"
-    return get_fallback_recommendations(sector, current_score)
+    fallback_recs = get_fallback_recommendations(sector, current_score)
+
+    # Cache fallback too (shorter TTL - 5 minutes)
+    try:
+        if recommendations_redis:
+            recommendations_redis.setex(cache_key, 300, json.dumps(fallback_recs))
+        else:
+            RECOMMENDATIONS_CACHE[cache_key] = (fallback_recs, time.time())
+    except Exception:
+        pass
+
+    return fallback_recs
 
 def get_fallback_recommendations(sector: str, current_score: int) -> List[Dict[str, Any]]:
     """Get fallback recommendations based on sector and score"""

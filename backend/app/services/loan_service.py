@@ -106,6 +106,7 @@ class LoanQuote:
     terms_and_conditions: List[str]
     compliance_checks: Dict[str, bool]
     created_at: datetime
+    eligibility_warnings: Optional[List[str]] = None  # Warnings about eligibility issues
 
 
 @dataclass
@@ -257,7 +258,16 @@ class LoanManagementService:
         # GreenScore requirements
         current_score = latest_score.score if latest_score else 0
         if current_score < sector_profile.min_green_score:
-            reasons.append(f"Minimum GreenScore of {sector_profile.min_green_score} required for {sector.value}")
+            if current_score == 0:
+                reasons.append(
+                    f"Build your GreenScore by uploading evidence of eco-friendly practices. "
+                    f"Minimum score of {sector_profile.min_green_score} required for {sector.value} sector loans."
+                )
+            else:
+                reasons.append(
+                    f"Current GreenScore ({current_score}) below minimum ({sector_profile.min_green_score}) "
+                    f"for {sector.value} sector. Upload more evidence to improve your score."
+                )
 
         # Sector-specific maximum amount
         sector_max_amount = min(sector_profile.max_loan_amount, self.max_loan_amount)
@@ -323,8 +333,14 @@ class LoanManagementService:
 
         # First check eligibility
         eligibility = await self.assess_loan_eligibility(user, amount, tenor_months, db)
+
+        # Track eligibility warnings for display (don't block quote generation)
+        eligibility_warnings = []
+        ineligible = False
         if not eligibility.eligible:
-            raise ValueError(f"Loan not eligible: {'; '.join(eligibility.reasons)}")
+            ineligible = True
+            eligibility_warnings = eligibility.reasons
+            logger.info(f"⚠️ User {user.id} is not fully eligible, generating quote with penalty rates")
 
         # Get user data
         business_profile = db.query(BusinessProfile).filter(
@@ -341,6 +357,13 @@ class LoanManagementService:
         rate_calculation = await self._calculate_interest_rate(
             amount, tenor_months, current_score, business_profile
         )
+
+        # Apply penalty rates if ineligible
+        if ineligible:
+            penalty_multiplier = Decimal('1.3')  # 30% higher rate for ineligible users
+            rate_calculation['effective_rate'] = float(Decimal(str(rate_calculation['effective_rate'])) * penalty_multiplier)
+            rate_calculation['base_rate'] = float(Decimal(str(rate_calculation['base_rate'])) * penalty_multiplier)
+            logger.info(f"Applied {penalty_multiplier}x penalty multiplier to rates")
 
         # Calculate payment details
         monthly_payment = self._calculate_monthly_payment(
@@ -368,7 +391,8 @@ class LoanManagementService:
             locked_until=None,
             terms_and_conditions=await self._generate_terms_and_conditions(amount, tenor_months),
             compliance_checks=await self._perform_compliance_checks(user, amount, db),
-            created_at=now
+            created_at=now,
+            eligibility_warnings=eligibility_warnings if eligibility_warnings else None
         )
 
         # Save quote to audit log
@@ -629,9 +653,10 @@ class LoanManagementService:
         if annual_rate == 0:
             return principal / tenor_months
 
-        monthly_rate = annual_rate / 12
-        factor = (1 + monthly_rate) ** tenor_months
-        monthly_payment = principal * (monthly_rate * factor) / (factor - 1)
+        # Convert to Decimal for precise calculation
+        monthly_rate = Decimal(str(annual_rate)) / Decimal('12')
+        factor = (Decimal('1') + monthly_rate) ** tenor_months
+        monthly_payment = principal * (monthly_rate * factor) / (factor - Decimal('1'))
 
         return Decimal(str(round(float(monthly_payment), 2)))
 

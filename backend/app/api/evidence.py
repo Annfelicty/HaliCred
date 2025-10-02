@@ -90,10 +90,14 @@ async def upload_evidence_file(
         evidence_uuid = uuid.uuid4()
         evidence_id = str(evidence_uuid)
 
+        # Generate S3 key for evidence
+        s3_key = f"evidence/{user.id}/{evidence_uuid}_{file.filename}"
+
         # Create evidence record in database
         evidence = Evidence(
             id=evidence_uuid,
             user_id=user.id,
+            s3_key=s3_key,
             status="processing"
         )
         db.add(evidence)
@@ -118,6 +122,14 @@ async def upload_evidence_file(
             file_path=temp_file_path,
             db=db
         )
+
+        # Update evidence status based on processing result
+        if result.get("success"):
+            evidence.status = "verified"
+            db.commit()
+        else:
+            evidence.status = "rejected"
+            db.commit()
 
         # Clean up temporary file
         try:

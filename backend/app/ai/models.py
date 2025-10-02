@@ -131,3 +131,4 @@ class AIOrchestrationResult(BaseModel):
     requires_human_review: bool = False
     provenance: Dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.now)
+    processing_time_ms: Optional[float] = None
